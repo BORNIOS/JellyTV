@@ -77,6 +77,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             PluginLog.Info("Creating SessionManagerService...");
             SessionManager = new SessionManagerService(
                 RedirectResolver,
+                httpClientFactory,
                 loggerFactory.CreateLogger<SessionManagerService>());
             PluginLog.Info("SessionManagerService OK");
 

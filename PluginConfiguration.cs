@@ -36,4 +36,26 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets whether verbose logging is enabled.
     /// </summary>
     public bool VerboseLogging { get; set; } = false;
+
+    /// <summary>
+    /// When true the plugin will proxy segment requests server-side instead of
+    /// only resolving final URLs. Use only if necessary; proxying increases server
+    /// bandwidth and may require careful header/cookie handling to succeed.
+    /// </summary>
+    public bool EnableProxyMode { get; set; } = false;
+
+    /// <summary>
+    /// When true the plugin will download and concatenate segments server-side using ffmpeg.
+    /// </summary>
+    public bool EnableConcatMode { get; set; } = false;
+
+    /// <summary>
+    /// Interval in seconds at which to run the concatenation job (default 20s).
+    /// </summary>
+    public int ConcatIntervalSeconds { get; set; } = 20;
+
+    /// <summary>
+    /// Path to ffmpeg executable. If empty, assumes ffmpeg is on PATH.
+    /// </summary>
+    public string FfmpegPath { get; set; } = "ffmpeg";
 }

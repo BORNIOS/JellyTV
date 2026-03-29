@@ -87,15 +87,96 @@ public class IptvProxyController : ControllerBase
             }
 
             var resolved = session.LastResolved!;
-            PluginLog.Info($"[STREAM] Resolved: FinalUrl={resolved.FinalUrl} | IsHls={resolved.IsHls} | TokenExpiry={resolved.TokenExpiry}");
+            PluginLog.Info($"[STREAM] Resolved: FinalUrl={resolved.FinalUrl} | IsHls={resolved.IsHls} | TokenExpiry={resolved.TokenExpiry} | TokenPresent={!string.IsNullOrEmpty(resolved.TokenValue)}");
 
             if (resolved.IsHls)
             {
+                PluginLog.Info("[STREAM] Resolved HLS playlist; confirming fresh token and expanding segments.");
+
+                // Re-resolve the channel URL to confirm token hasn't rotated and update session
+                try
+                {
+                    var resolver = Plugin.Instance?.RedirectResolver;
+                    if (resolver is not null)
+                    {
+                        var fresh = await resolver.ResolveAsync(resolved.FinalUrl, cancellationToken).ConfigureAwait(false);
+                        if (!string.Equals(fresh.TokenValue, resolved.TokenValue, StringComparison.Ordinal))
+                        {
+                            PluginLog.Info($"[STREAM] Token changed on re-resolve. Updating session token. OldPresent={!string.IsNullOrEmpty(resolved.TokenValue)} NewPresent={!string.IsNullOrEmpty(fresh.TokenValue)}");
+                            // update session storage if available (use the existing session variable)
+                            session = await Sessions.GetOrCreateSessionAsync(resolved.OriginalUrl, cancellationToken).ConfigureAwait(false);
+                            session.LastResolved = fresh;
+                            resolved = fresh;
+                        }
+                        else
+                        {
+                            PluginLog.Info("[STREAM] Token unchanged after re-resolve.");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    PluginLog.Warn($"[STREAM] Re-resolve failed: {ex.Message} — continuing with previous resolution.");
+                }
+                var client = _httpClientFactory.CreateClient("IptvProxy");
+                var playlistContent = await client.GetStringAsync(resolved.FinalUrl, cancellationToken).ConfigureAwait(false);
+
+                // Detect master playlist
+                if (playlistContent.Contains("#EXT-X-STREAM-INF", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Try to pick the first variant's URI and expand that media playlist
+                    using var r = new StringReader(playlistContent);
+                    string? line;
+                    string? variantUri = null;
+                    while ((line = r.ReadLine()) is not null)
+                    {
+                        if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#')) continue;
+                        variantUri = line.Trim();
+                        break;
+                    }
+
+                    if (variantUri is not null)
+                    {
+                        var abs = variantUri.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                            ? variantUri : new Uri(new Uri(resolved.BaseUrl), variantUri).ToString();
+                        try
+                        {
+                            var sub = await _httpClientFactory.CreateClient("IptvProxy").GetStringAsync(abs, cancellationToken).ConfigureAwait(false);
+                            playlistContent = sub; // process as media playlist below
+                        }
+                        catch (Exception ex)
+                        {
+                            PluginLog.Warn($"[STREAM] Failed to fetch variant playlist {abs}: {ex.Message}");
+                        }
+                    }
+                }
+
+                // Process media playlist: for each non-comment line, point to our /segment endpoint
+                // so the client requests each fragment through us and we can resolve a fresh token per fragment.
+                var sb = new StringBuilder();
+                using var reader = new StringReader(playlistContent);
+                string? ln;
                 var proxyBase = GetProxyBaseUrl();
-                PluginLog.Info($"[STREAM] Rewriting HLS playlist. ProxyBase={proxyBase}");
-                var playlist = await Rewriter.FetchAndRewritePlaylistAsync(session, proxyBase, cancellationToken).ConfigureAwait(false);
-                PluginLog.Info($"[STREAM] Playlist rewritten. Lines={playlist.Split('\n').Length}");
-                return Content(playlist, "application/vnd.apple.mpegurl", Encoding.UTF8);
+                while ((ln = reader.ReadLine()) is not null)
+                {
+                    if (string.IsNullOrWhiteSpace(ln) || ln.StartsWith('#'))
+                    {
+                        sb.AppendLine(ln);
+                        continue;
+                    }
+
+                    var abs = ln.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                        ? ln : new Uri(new Uri(resolved.BaseUrl), ln).ToString();
+
+                    // Encode the absolute segment URL and point the playlist to our segment endpoint.
+                    var enc = Convert.ToBase64String(Encoding.UTF8.GetBytes(abs)).Replace('+', '-').Replace('/', '_').TrimEnd('=');
+                    var proxySeg = $"{proxyBase}/segment?sid={Uri.EscapeDataString(session.SessionId)}&url={enc}";
+                    sb.AppendLine(proxySeg);
+                }
+
+                var expanded = sb.ToString();
+                PluginLog.Info($"[STREAM] Expanded playlist lines={expanded.Split('\n').Length}");
+                return Content(expanded, "application/vnd.apple.mpegurl", Encoding.UTF8);
             }
 
             PluginLog.Info($"[STREAM] Non-HLS stream. Redirecting to: {resolved.FinalUrl}");
@@ -159,13 +240,98 @@ public class IptvProxyController : ControllerBase
     {
         var client = _httpClientFactory.CreateClient("IptvProxy");
 
+        // Try to use a cached resolution first
+        var fetchUrl = upstreamUrl;
+        var now = DateTimeOffset.UtcNow;
+        if (session.SegmentResolveCache.TryGetValue(upstreamUrl, out var cached) && cached.Expiry > now)
+        {
+            fetchUrl = cached.FinalUrl;
+            PluginLog.Info($"[SEGMENT] Using cached resolved URL for segment: {fetchUrl}");
+        }
+        else
+        {
+            // Try to resolve the segment URL to its final location (follow redirects
+            // to obtain tokenized URLs issued by the provider). If resolution fails
+            // with 401/403, fall back to using the provided upstreamUrl directly.
+            try
+            {
+                var resolver = Plugin.Instance?.RedirectResolver;
+                if (resolver is not null)
+                {
+                    var resolved = await resolver.ResolveAsync(upstreamUrl, ct).ConfigureAwait(false);
+                    fetchUrl = resolved.FinalUrl ?? upstreamUrl;
+                    // cache short-lived (e.g., 30s)
+                    session.SegmentResolveCache[upstreamUrl] = (fetchUrl, DateTimeOffset.UtcNow.AddSeconds(30));
+                    // update preferred host for the session
+                    try
+                    {
+                        session.PreferredHost = new Uri(fetchUrl).Host;
+                    }
+                    catch { }
+                    PluginLog.Info($"[SEGMENT] Resolved segment URL to final: {fetchUrl}");
+                }
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Forbidden || ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                PluginLog.Warn($"[SEGMENT] Resolver returned {ex.StatusCode} for {upstreamUrl}; using original URL.");
+                fetchUrl = upstreamUrl;
+            }
+            catch (Exception ex)
+            {
+                PluginLog.Warn($"[SEGMENT] Resolver failed for {upstreamUrl}: {ex.Message}; using original URL.");
+                fetchUrl = upstreamUrl;
+            }
+        }
+        try
+        {
+            var resolver = Plugin.Instance?.RedirectResolver;
+            if (resolver is not null)
+            {
+                var resolved = await resolver.ResolveAsync(upstreamUrl, ct).ConfigureAwait(false);
+                fetchUrl = resolved.FinalUrl ?? upstreamUrl;
+                PluginLog.Info($"[SEGMENT] Resolved segment URL to final: {fetchUrl}");
+            }
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Forbidden || ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            PluginLog.Warn($"[SEGMENT] Resolver returned {ex.StatusCode} for {upstreamUrl}; using original URL.");
+            fetchUrl = upstreamUrl;
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"[SEGMENT] Resolver failed for {upstreamUrl}: {ex.Message}; using original URL.");
+            fetchUrl = upstreamUrl;
+        }
+
+        var config = Plugin.Instance?.Configuration as Jellyfin.Plugin.IptvProxy.Configuration.PluginConfiguration;
+        var userAgent = config?.UserAgent ?? "Mozilla/5.0 (compatible; JellyfinIptvProxy/1.0)";
+
         for (var attempt = 1; attempt <= 2; attempt++)
         {
-            PluginLog.Info($"[SEGMENT] Fetching attempt {attempt}: {upstreamUrl}");
+            PluginLog.Info($"[SEGMENT] Fetching attempt {attempt}: {fetchUrl}");
             HttpResponseMessage response;
             try
             {
-                response = await client.GetAsync(upstreamUrl, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                // Build outgoing request message so we can control headers (User-Agent, Referer, Range)
+                using var req = new HttpRequestMessage(HttpMethod.Get, fetchUrl);
+                req.Headers.TryAddWithoutValidation("User-Agent", userAgent);
+                // Set Referer to the playlist base if available to mimic a legitimate player
+                if (!string.IsNullOrEmpty(session.LastResolved?.FinalUrl))
+                {
+                    try
+                    {
+                        var refUri = new Uri(session.LastResolved.FinalUrl);
+                        req.Headers.Referrer = new Uri(refUri.GetLeftPart(UriPartial.Authority));
+                    }
+                    catch { }
+                }
+                // Forward Range header if client requested partial content
+                if (Request.Headers.TryGetValue("Range", out var range))
+                {
+                    req.Headers.TryAddWithoutValidation("Range", (string)range);
+                }
+
+                response = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -183,6 +349,21 @@ public class IptvProxyController : ControllerBase
                 {
                     await Sessions.RenewSessionAsync(session, ct).ConfigureAwait(false);
                     PluginLog.Info($"[SEGMENT] Renewal OK. New URL={session.LastResolved?.FinalUrl}");
+                    // After renewal, try to re-resolve the specific segment to its new final URL
+                    try
+                    {
+                        var resolver = Plugin.Instance?.RedirectResolver;
+                        if (resolver is not null)
+                        {
+                            var re = await resolver.ResolveAsync(upstreamUrl, ct).ConfigureAwait(false);
+                            fetchUrl = re.FinalUrl ?? fetchUrl;
+                            PluginLog.Info($"[SEGMENT] Re-resolved segment URL after renewal: {fetchUrl}");
+                        }
+                    }
+                    catch (Exception rex)
+                    {
+                        PluginLog.Warn($"[SEGMENT] Re-resolve failed after renewal: {rex.Message}");
+                    }
                 }
                 catch (Exception ex)
                 {

@@ -89,7 +89,14 @@ public class RedirectResolverService
                 continue;
             }
 
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("[IptvProxy] Non-success HTTP {Status} while resolving {Url}", (int)response.StatusCode, currentUrl);
+                // Throw an HttpRequestException that preserves the status code for callers to handle
+                var status = response.StatusCode;
+                response.Dispose();
+                throw new HttpRequestException($"Response status code does not indicate success: {(int)status} ({status}).", null, status);
+            }
             response.Dispose();
             break;
         }
@@ -102,6 +109,7 @@ public class RedirectResolverService
         var baseUrl = BuildBaseUrl(currentUrl);
         var isHls = IsHlsUrl(currentUrl, contentType);
         var tokenExpiry = TryParseTokenExpiry(currentUrl);
+        var tokenValue = TryExtractTokenFromUrl(currentUrl);
 
         var resolved = new ResolvedStream
         {
@@ -111,14 +119,40 @@ public class RedirectResolverService
             ContentType = contentType,
             IsHls = isHls,
             TokenExpiry = tokenExpiry,
+            TokenValue = tokenValue,
             ResolvedAt = DateTimeOffset.UtcNow
         };
 
         _logger.LogInformation(
-            "[IptvProxy] Resolved to: {FinalUrl} | HLS={IsHls} | TokenExpiry={Expiry}",
-            currentUrl, isHls, tokenExpiry?.ToString("o") ?? "unknown");
+            "[IptvProxy] Resolved to: {FinalUrl} | HLS={IsHls} | TokenExpiry={Expiry} | TokenPresent={TokenPresent}",
+            currentUrl, isHls, tokenExpiry?.ToString("o") ?? "unknown", !string.IsNullOrEmpty(tokenValue));
 
         return resolved;
+    }
+
+    private string? TryExtractTokenFromUrl(string url)
+    {
+        try
+        {
+            var uri = new Uri(url);
+            var qs = System.Web.HttpUtility.ParseQueryString(uri.Query);
+
+            // Common token parameter names used by IPTV providers
+            foreach (var key in new[] { "token", "access_token", "auth", "t", "key", "sig", "tokenid" })
+            {
+                var v = qs[key];
+                if (!string.IsNullOrEmpty(v))
+                {
+                    return v;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[IptvProxy] Could not extract token from URL");
+        }
+
+        return null;
     }
 
     /// <summary>
