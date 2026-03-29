@@ -12,23 +12,28 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.IptvProxy;
 
 /// <summary>
-/// Jellyfin IPTV Proxy Plugin entry point.
-/// Owns and exposes all plugin services as singletons accessible via <see cref="Instance"/>.
+/// Main plugin class for the IPTV Proxy. Registers services and exposes configuration pages.
 /// </summary>
 public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
-    private readonly IHttpClientFactory _httpClientFactory;
-
-    /// <summary>Gets the plugin singleton.</summary>
+    /// <summary>
+    /// Singleton instance of the plugin (set during construction).
+    /// </summary>
     public static Plugin? Instance { get; private set; }
 
-    /// <summary>Gets the redirect resolver service.</summary>
+    /// <summary>
+    /// Redirect resolver used to follow upstream redirects and extract final stream URLs.
+    /// </summary>
     public RedirectResolverService RedirectResolver { get; }
 
-    /// <summary>Gets the HLS rewriter service.</summary>
+    /// <summary>
+    /// HLS rewriter used to rewrite playlists so segments are proxied through the plugin.
+    /// </summary>
     public HlsRewriterService HlsRewriter { get; }
 
-    /// <summary>Gets the session manager service.</summary>
+    /// <summary>
+    /// Background session manager that tracks active stream sessions and renews tokens.
+    /// </summary>
     public SessionManagerService SessionManager { get; }
 
     /// <inheritdoc />
@@ -38,13 +43,10 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public override Guid Id => Guid.Parse("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
 
     /// <inheritdoc />
-    public override string Description =>
-        "Proxies IPTV streams, follows HTTP redirects, and auto-renews time-limited tokens for uninterrupted playback.";
+    public override string Description => "Proxies IPTV streams and auto-renews tokens.";
 
     /// <summary>
-    /// Initializes a new instance of the <see cref="Plugin"/> class.
-    /// Jellyfin injects <see cref="IApplicationPaths"/>, <see cref="IXmlSerializer"/>,
-    /// <see cref="IHttpClientFactory"/>, and <see cref="ILoggerFactory"/> automatically.
+    /// Initializes the plugin and registers internal services.
     /// </summary>
     public Plugin(
         IApplicationPaths applicationPaths,
@@ -53,35 +55,53 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         ILoggerFactory loggerFactory)
         : base(applicationPaths, xmlSerializer)
     {
+        PluginLog.Info("=== IPTV Proxy Plugin: constructor START ===");
+        PluginLog.Info($"Log file: {AppContext.BaseDirectory}iptv-proxy-debug.log");
+
         Instance = this;
-        _httpClientFactory = httpClientFactory;
 
-        RedirectResolver = new RedirectResolverService(
-            _httpClientFactory,
-            loggerFactory.CreateLogger<RedirectResolverService>());
+        try
+        {
+            PluginLog.Info("Creating RedirectResolverService...");
+            RedirectResolver = new RedirectResolverService(
+                httpClientFactory,
+                loggerFactory.CreateLogger<RedirectResolverService>());
+            PluginLog.Info("RedirectResolverService OK");
 
-        HlsRewriter = new HlsRewriterService(
-            _httpClientFactory,
-            loggerFactory.CreateLogger<HlsRewriterService>());
+            PluginLog.Info("Creating HlsRewriterService...");
+            HlsRewriter = new HlsRewriterService(
+                httpClientFactory,
+                loggerFactory.CreateLogger<HlsRewriterService>());
+            PluginLog.Info("HlsRewriterService OK");
 
-        SessionManager = new SessionManagerService(
-            RedirectResolver,
-            loggerFactory.CreateLogger<SessionManagerService>());
+            PluginLog.Info("Creating SessionManagerService...");
+            SessionManager = new SessionManagerService(
+                RedirectResolver,
+                loggerFactory.CreateLogger<SessionManagerService>());
+            PluginLog.Info("SessionManagerService OK");
 
-        // Start the background token-renewal loop
-        SessionManager.StartAsync(default).GetAwaiter().GetResult();
+            PluginLog.Info("Starting background token renewal loop...");
+            SessionManager.StartAsync(default).GetAwaiter().GetResult();
+            PluginLog.Info("Background service started OK");
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Error("FATAL: Plugin failed to initialize", ex);
+            throw;
+        }
+
+        PluginLog.Info("=== IPTV Proxy Plugin: constructor END — plugin is ACTIVE ===");
     }
 
-    /// <inheritdoc />
-    public IEnumerable<PluginPageInfo> GetPages()
-    {
-        return
-        [
-            new PluginPageInfo
-            {
-                Name = "IPTV Proxy",
-                EmbeddedResourcePath = $"{GetType().Namespace}.Configuration.configPage.html"
-            }
-        ];
-    }
+    /// <summary>
+    /// Returns the admin web pages (configuration UI) for the plugin.
+    /// </summary>
+    public IEnumerable<PluginPageInfo> GetPages() =>
+    [
+        new PluginPageInfo
+        {
+            Name = "IPTV Proxy",
+            EmbeddedResourcePath = $"{GetType().Namespace}.Configuration.configPage.html"
+        }
+    ];
 }
