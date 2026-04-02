@@ -1,4 +1,4 @@
-# Jellyfin.Plugin.IptvProxy
+# JellyTV
 
 Plugin para Jellyfin que actúa como proxy inteligente para servicios IPTV con tokens de autenticación de corta duración y múltiples redirecciones HTTP.
 
@@ -16,7 +16,7 @@ Los reproductores estándar (incluyendo el cliente Jellyfin base) no saben renov
 Cliente Jellyfin
     │
     ▼
-GET /IptvProxy/stream?url=<url-original>
+GET /JellyTV/stream?url=<url-original>
     │
     ▼
 RedirectResolverService  ──►  IPTV Provider
@@ -24,13 +24,13 @@ RedirectResolverService  ──►  IPTV Provider
     │
     ▼
 HlsRewriterService
-(reescribe m3u8: cada segmento → /IptvProxy/segment?sid=...&url=...)
+(reescribe m3u8: cada segmento → /JellyTV/segment?sid=...&url=...)
     │
     ▼
 Playlist reescrito → Cliente
     │
     ▼  (cliente pide segmentos)
-GET /IptvProxy/segment?sid=...&url=<segmento-encoded>
+GET /JellyTV/segment?sid=...&url=<segmento-encoded>
     │
     ├── Si token caducó (403/401): RenovarSesión → retry
     └── Stream del segmento .ts → Cliente
@@ -44,25 +44,25 @@ SessionManagerService (BackgroundService)
 ### Opción A — Compilar desde fuente
 
 ```bash
-cd Jellyfin.Plugin.IptvProxy
+cd JellyTV
 dotnet build -c Release
 ```
 
-Copiar `bin/Release/net8.0/Jellyfin.Plugin.IptvProxy.dll` a:
-- **Linux/Docker**: `/config/plugins/IptvProxy/`
-- **Windows**: `%APPDATA%\Jellyfin\plugins\IptvProxy\`
+Copiar `bin/Release/net9.0/JellyTV.dll` a:
+- **Linux/Docker**: `/config/plugins/JellyTV/`
+- **Windows**: `%APPDATA%\Jellyfin\plugins\JellyTV\`
 
 Reiniciar Jellyfin.
 
 ### Opción B — Repositorio de plugins (cuando esté publicado)
 
-Agregar el repositorio en Jellyfin → Dashboard → Plugins → Repositories y buscar "IPTV Proxy".
+Agregar el repositorio en Jellyfin → Dashboard → Plugins → Repositories y buscar "JellyTV".
 
 ## Uso
 
 ### 1. Configurar el plugin
 
-Ir a **Dashboard → Plugins → IPTV Proxy** y ajustar:
+Ir a **Dashboard → Plugins → JellyTV** y ajustar:
 
 | Parámetro | Por defecto | Descripción |
 |---|---|---|
@@ -83,7 +83,7 @@ http://tu-proveedor.com/live/usuario/pass/canal123
 
 **URL para Jellyfin (Live TV → Tuner):**
 ```
-http://localhost:8096/IptvProxy/stream?url=http%3A%2F%2Ftu-proveedor.com%2Flive%2Fusuario%2Fpass%2Fcanal123
+http://localhost:8096/JellyTV/stream?url=http%3A%2F%2Ftu-proveedor.com%2Flive%2Fusuario%2Fpass%2Fcanal123
 ```
 
 Puedes automatizar esto con un script que genere la lista M3U ya transformada.
@@ -120,7 +120,7 @@ t=300    ──► Token antiguo caducó — pero ya fue renovado en t=270 ✓
 
 ## Consideraciones de seguridad
 
-- El endpoint `/IptvProxy/stream` requiere autenticación Jellyfin (`DefaultAuthorization`).
+- El endpoint `/JellyTV/stream` requiere autenticación Jellyfin (`DefaultAuthorization`).
 - Las URLs de segmentos incluyen el `sessionId` para verificar que la sesión existe.
 - Las URLs upstream se codifican en Base64 URL-safe; el servidor no expone las credenciales IPTV directamente en logs por defecto.
 
@@ -132,14 +132,14 @@ t=300    ──► Token antiguo caducó — pero ya fue renovado en t=270 ✓
 ## Estructura del proyecto
 
 ```
-Jellyfin.Plugin.IptvProxy/
+JellyTV/
 ├── Plugin.cs                          # Entrada principal del plugin
 ├── PluginServiceRegistrator.cs        # Registro de servicios DI
 ├── Configuration/
 │   ├── PluginConfiguration.cs         # Modelo de configuración
 │   └── configPage.html                # UI de configuración en Jellyfin
 ├── Controllers/
-│   └── IptvProxyController.cs         # Endpoints HTTP /stream y /segment
+│   └── JellyTV.cs         # Endpoints HTTP /stream y /segment
 ├── Models/
 │   └── StreamSession.cs               # Modelos de sesión y stream resuelto
 └── Services/

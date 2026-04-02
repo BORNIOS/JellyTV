@@ -1,11 +1,12 @@
 using System;
 using System.Net.Http;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfin.Plugin.IptvProxy.Models;
+using JellyTV.Models;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.IptvProxy.Services;
+namespace JellyTV.Services;
 
 /// <summary>
 /// Resolves IPTV URLs by following HTTP redirects to obtain the final playback URL.
@@ -36,7 +37,7 @@ public class RedirectResolverService
     {
         var config = Plugin.Instance?.Configuration;
         var maxRedirects = config?.MaxRedirects ?? 10;
-        var userAgent = config?.UserAgent ?? "Mozilla/5.0 (compatible; JellyfinIptvProxy/1.0)";
+        var userAgent = config?.UserAgent ?? "Mozilla/5.0 (compatible; JellyTV/1.0)";
 
         // Use a client that does NOT auto-follow redirects so we can track them
         var client = _httpClientFactory.CreateClient("IptvNoRedirect");
@@ -44,9 +45,11 @@ public class RedirectResolverService
 
         var currentUrl = originalUrl;
         var redirectCount = 0;
+        var redirectChain = new List<string> { originalUrl };
         string contentType = string.Empty;
+        string? initialPlaylistContent = null;
 
-        _logger.LogInformation("[IptvProxy] Starting resolution for: {Url}", originalUrl);
+        _logger.LogInformation("[JellyTV] Starting resolution for: {Url}", originalUrl);
 
         while (redirectCount <= maxRedirects)
         {
@@ -57,12 +60,15 @@ public class RedirectResolverService
 
             try
             {
+                PluginLog.Info($"[RESOLVE] GET {currentUrl} (attempt {redirectCount + 1})");
                 response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                     .ConfigureAwait(false);
+                PluginLog.Info($"[RESOLVE] Response {currentUrl} -> {(int)response.StatusCode}");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[IptvProxy] HTTP error fetching {Url}", currentUrl);
+                _logger.LogError(ex, "[JellyTV] HTTP error fetching {Url}", currentUrl);
+                PluginLog.Error($"[RESOLVE] HTTP error fetching {currentUrl}", ex);
                 throw;
             }
 
@@ -73,7 +79,8 @@ public class RedirectResolverService
                 var location = response.Headers.Location;
                 if (location is null)
                 {
-                    _logger.LogWarning("[IptvProxy] Redirect with no Location header at {Url}", currentUrl);
+                    _logger.LogWarning("[JellyTV] Redirect with no Location header at {Url}", currentUrl);
+                    PluginLog.Warn($"[RESOLVE] Redirect with no Location header at {currentUrl}");
                     break;
                 }
 
@@ -82,7 +89,10 @@ public class RedirectResolverService
                     ? location.ToString()
                     : new Uri(new Uri(currentUrl), location).ToString();
 
-                _logger.LogDebug("[IptvProxy] Redirect {Count}: {From} -> {To}", redirectCount + 1, currentUrl, nextUrl);
+                _logger.LogDebug("[JellyTV] Redirect {Count}: {From} -> {To}", redirectCount + 1, currentUrl, nextUrl);
+                PluginLog.Info($"[RESOLVE] Redirect {redirectCount + 1}: {currentUrl} -> {nextUrl}");
+                // Record redirect hop
+                redirectChain.Add(nextUrl);
                 currentUrl = nextUrl;
                 redirectCount++;
                 response.Dispose();
@@ -91,19 +101,33 @@ public class RedirectResolverService
 
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogWarning("[IptvProxy] Non-success HTTP {Status} while resolving {Url}", (int)response.StatusCode, currentUrl);
+                _logger.LogWarning("[JellyTV] Non-success HTTP {Status} while resolving {Url}", (int)response.StatusCode, currentUrl);
+                PluginLog.Warn($"[RESOLVE] Non-success HTTP {(int)response.StatusCode} while resolving {currentUrl}");
                 // Throw an HttpRequestException that preserves the status code for callers to handle
                 var status = response.StatusCode;
                 response.Dispose();
                 throw new HttpRequestException($"Response status code does not indicate success: {(int)status} ({status}).", null, status);
             }
+
+            // Read the body on the final 200 step so the BroadcastPump can reuse it
+            // without making a second GET.  Many IPTV providers apply a per-token
+            // rate-limit (effectively single-use per window), so a redundant fetch
+            // immediately after resolution returns 403 and causes a ~52-second 403 loop.
+            string? resolverBodyText = null;
+            var ct2 = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+            if (IsHlsUrl(currentUrl, ct2))
+            {
+                try { resolverBodyText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false); }
+                catch { /* non-fatal — pump will fetch normally */ }
+            }
             response.Dispose();
+            initialPlaylistContent = resolverBodyText;
             break;
         }
 
         if (redirectCount > maxRedirects)
         {
-            throw new InvalidOperationException($"[IptvProxy] Exceeded maximum redirect count ({maxRedirects}) for URL: {originalUrl}");
+            throw new InvalidOperationException($"[JellyTV] Exceeded maximum redirect count ({maxRedirects}) for URL: {originalUrl}");
         }
 
         var baseUrl = BuildBaseUrl(currentUrl);
@@ -120,12 +144,27 @@ public class RedirectResolverService
             IsHls = isHls,
             TokenExpiry = tokenExpiry,
             TokenValue = tokenValue,
-            ResolvedAt = DateTimeOffset.UtcNow
+            ResolvedAt = DateTimeOffset.UtcNow,
+            InitialPlaylistContent = initialPlaylistContent
         };
 
+        // Attach the redirect chain for diagnostics/history
+        resolved.RedirectChain = redirectChain;
+
         _logger.LogInformation(
-            "[IptvProxy] Resolved to: {FinalUrl} | HLS={IsHls} | TokenExpiry={Expiry} | TokenPresent={TokenPresent}",
+            "[JellyTV] Resolved to: {FinalUrl} | HLS={IsHls} | TokenExpiry={Expiry} | TokenPresent={TokenPresent}",
             currentUrl, isHls, tokenExpiry?.ToString("o") ?? "unknown", !string.IsNullOrEmpty(tokenValue));
+
+        // Write redirect chain to plugin log for diagnostics
+        try
+        {
+            PluginLog.Info($"[RESOLVE] Final: {currentUrl} | HLS={isHls} | TokenPresent={!string.IsNullOrEmpty(tokenValue)} | ChainCount={redirectChain.Count}");
+            for (var i = 0; i < redirectChain.Count; i++)
+            {
+                PluginLog.Info($"[RESOLVE] Chain[{i}] = {redirectChain[i]}");
+            }
+        }
+        catch { }
 
         return resolved;
     }
@@ -149,7 +188,7 @@ public class RedirectResolverService
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "[IptvProxy] Could not extract token from URL");
+            _logger.LogDebug(ex, "[JellyTV] Could not extract token from URL");
         }
 
         return null;
@@ -204,7 +243,7 @@ public class RedirectResolverService
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "[IptvProxy] Could not parse token expiry from URL");
+            _logger.LogDebug(ex, "[JellyTV] Could not parse token expiry from URL");
         }
 
         return null;

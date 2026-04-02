@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="JellyTV IPTV Panel">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a1a2d"/>
+      <stop offset="100%" stop-color="#0f2b3f"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0ea5c0"/>
+      <stop offset="100%" stop-color="#14b8a6"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect x="80" y="90" width="1040" height="450" rx="24" fill="#0f172a" stroke="#1f2937"/>
+  <rect x="120" y="140" width="440" height="320" rx="18" fill="url(#card)"/>
+  <rect x="610" y="150" width="460" height="22" rx="11" fill="#155e75"/>
+  <rect x="610" y="200" width="400" height="18" rx="9" fill="#164e63"/>
+  <rect x="610" y="240" width="360" height="18" rx="9" fill="#164e63"/>
+  <rect x="610" y="280" width="420" height="18" rx="9" fill="#164e63"/>
+  <rect x="610" y="320" width="330" height="18" rx="9" fill="#164e63"/>
+  <text x="610" y="410" fill="#e2e8f0" font-family="Segoe UI, Arial, sans-serif" font-size="56" font-weight="700">JellyTV</text>
+  <text x="610" y="455" fill="#94a3b8" font-family="Segoe UI, Arial, sans-serif" font-size="30">Canales IPTV y Listas M3U dinamicas</text>
+</svg>

@@ -4,11 +4,11 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfin.Plugin.IptvProxy.Models;
+using JellyTV.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
-namespace Jellyfin.Plugin.IptvProxy.Services;
+namespace JellyTV.Services;
 
 /// <summary>
 /// Fetches and rewrites HLS playlists so all segment and sub-playlist URLs
@@ -35,7 +35,7 @@ public class HlsRewriterService
     /// rewrites all URIs to go through the proxy, and returns the modified content.
     /// </summary>
     /// <param name="session">The active stream session.</param>
-    /// <param name="proxyBaseUrl">The base URL of this proxy controller (e.g. https://jellyfin/IptvProxy).</param>
+    /// <param name="proxyBaseUrl">The base URL of this proxy controller (e.g. https://jellyfin/JellyTV).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The rewritten m3u8 playlist as a UTF-8 string.</returns>
     public async Task<string> FetchAndRewritePlaylistAsync(
@@ -46,7 +46,7 @@ public class HlsRewriterService
         var resolved = session.LastResolved
             ?? throw new InvalidOperationException("Session has no resolved stream.");
 
-        var client = _httpClientFactory.CreateClient("IptvProxy");
+        var client = _httpClientFactory.CreateClient("JellyTV");
         var playlistContent = await client.GetStringAsync(resolved.FinalUrl, cancellationToken)
             .ConfigureAwait(false);
 
@@ -91,7 +91,7 @@ public class HlsRewriterService
 
             if (Plugin.Instance?.Configuration.VerboseLogging == true)
             {
-                _logger.LogDebug("[IptvProxy] Rewrote segment: {Original} -> {Proxied}", line, proxiedUri);
+                _logger.LogDebug("[JellyTV] Rewrote segment: {Original} -> {Proxied}", line, proxiedUri);
             }
 
             sb.AppendLine(proxiedUri);

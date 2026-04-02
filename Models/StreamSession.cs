@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 
-namespace Jellyfin.Plugin.IptvProxy.Models;
+namespace JellyTV.Models;
 
 /// <summary>
 /// Represents a resolved IPTV stream with its final URL and token metadata.
@@ -46,6 +48,18 @@ public class ResolvedStream
     /// If present, the token value extracted from the final URL's query string.
     /// </summary>
     public string? TokenValue { get; set; }
+
+    /// <summary>
+    /// Gets or sets the chain of redirects followed to reach the final URL, in order.
+    /// </summary>
+    public List<string> RedirectChain { get; set; } = new();
+
+    /// <summary>
+    /// Body text fetched during the resolver's final GET.
+    /// Available exactly once: the BroadcastPump consumes it to avoid a second
+    /// rate-limited request to a single-use provider token.
+    /// </summary>
+    public string? InitialPlaylistContent { get; set; }
 }
 
 /// <summary>
@@ -78,6 +92,28 @@ public class StreamSession
     /// Gets or sets the last resolved stream information.
     /// </summary>
     public ResolvedStream? LastResolved { get; set; }
+
+    /// <summary>
+    /// Last rewritten HLS playlist served to Jellyfin for this session.
+    /// A short-lived cache avoids repeated upstream playlist fetches during probe/transcode startup.
+    /// </summary>
+    public string? LastPlaylistContent { get; set; }
+
+    /// <summary>
+    /// Final URL used to fetch <see cref="LastPlaylistContent"/>.
+    /// </summary>
+    public string? LastPlaylistSourceUrl { get; set; }
+
+    /// <summary>
+    /// Timestamp for <see cref="LastPlaylistContent"/>.
+    /// </summary>
+    public DateTimeOffset? LastPlaylistFetchedAt { get; set; }
+
+    /// <summary>
+    /// History of recent resolved streams (keeps last resolutions). Entries older than the configured retention
+    /// period should be pruned by the manager; stored here for quick access and diagnostics.
+    /// </summary>
+    public ConcurrentQueue<ResolvedStream> RedirectHistory { get; } = new();
 
     /// <summary>
     /// Gets or sets when this session was created.
@@ -118,4 +154,14 @@ public class StreamSession
     /// Set of downloaded segment filenames to avoid re-downloading.
     /// </summary>
     public System.Collections.Concurrent.ConcurrentDictionary<string, bool> DownloadedSegments { get; } = new();
+
+    /// <summary>
+    /// Cancellation token source for keep-alive background task.
+    /// </summary>
+    public System.Threading.CancellationTokenSource? KeepAliveCts { get; set; }
+
+    /// <summary>
+    /// Background keep-alive task reference.
+    /// </summary>
+    public System.Threading.Tasks.Task? KeepAliveTask { get; set; }
 }

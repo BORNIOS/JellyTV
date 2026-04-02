@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<title>JellyTV</title>
+<style>
+  .jellytv-wrap {
+    max-width: 1020px;
+  }
+
+  .jt-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+
+  .jt-status-line {
+    min-height: 1.3em;
+    font-size: .9em;
+  }
+
+  .jt-note {
+    margin-top: .45em;
+  }
+
+  .jt-card {
+    margin-bottom: 14px;
+  }
+
+  .jt-tableWrap {
+    overflow: auto;
+    border: 1px solid var(--divider-color, rgba(255,255,255,.08));
+    border-radius: 8px;
+    margin-top: 10px;
+  }
+
+  .jt-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 720px;
+  }
+
+  .jt-table th,
+  .jt-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--divider-color, rgba(255,255,255,.08));
+    text-align: left;
+    vertical-align: top;
+    font-size: .88em;
+  }
+
+  .jt-table th {
+    font-weight: 600;
+    color: var(--secondary-text-color, #b9b9b9);
+    background: rgba(255,255,255,.03);
+  }
+
+  .jt-table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .jt-url {
+    font-family: Consolas, monospace;
+    font-size: .82em;
+    word-break: break-all;
+    color: #cfd8dc;
+  }
+
+  .jt-small {
+    font-size: .8em;
+    color: var(--secondary-text-color, #9fa4a8);
+  }
+
+  .jt-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .jt-inline-btn {
+    min-width: auto !important;
+    padding: 6px 10px !important;
+    font-size: .78em !important;
+  }
+
+  .jt-danger {
+    background: #8b1e2f !important;
+    border-color: #8b1e2f !important;
+    color: #ffffff !important;
+  }
+
+  .jt-primary {
+    background: #0076b8 !important;
+    border-color: #0076b8 !important;
+    color: #ffffff !important;
+  }
+
+  .jt-panel {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border-radius: 8px;
+    border: 1px solid rgba(0,164,220,.45);
+    background: rgba(0,164,220,.06);
+  }
+
+  .jt-health {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 6px 0 12px 0;
+    font-size: .95em;
+  }
+
+  .jt-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    box-shadow: 0 0 0 2px rgba(255,255,255,.08);
+    flex: 0 0 12px;
+  }
+
+  .jt-dot.wait { background: #f5b400; }
+  .jt-dot.ok { background: #34a853; }
+  .jt-dot.fail { background: #ea4335; }
+
+  .jt-tuner-box {
+    margin-top: 8px;
+  }
+
+  .jt-muted {
+    color: var(--secondary-text-color, #9fa4a8);
+    font-size: .88em;
+  }
+
+  .checkboxContainer {
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .checkboxContainer .checkboxLabel {
+    margin: 0;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div id="JellyTVConfigPage"
+     data-role="page"
+  data-require="emby-input,emby-button"
+     data-pluginuniqueid="a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+     class="page type-interior pluginConfigurationPage">
+  <div data-role="content">
+    <div class="content-primary jellytv-wrap">
+      <form id="JellyTVConfigForm">
+
+        <fieldset class="verticalSection-extrabottompadding jt-card">
+          <legend class="sectionTitle"><h3>Fuentes M3U / IPTV</h3></legend>
+          <div class="configSection">
+            <div class="fieldDescription">Gestiona todas tus fuentes en una tabla unificada y edita cada entrada sin salir de la pagina.</div>
+
+            <div class="jt-toolbar">
+              <button id="btnShowSourceEditor" is="emby-button" type="button" class="raised button-submit emby-button jt-primary">
+                <span>Agregar fuente</span>
+              </button>
+              <button id="btnSyncSources" is="emby-button" type="button" class="emby-button">
+                <span>Sincronizar fuentes</span>
+              </button>
+            </div>
+
+            <div id="sourceEditor" class="jt-panel" style="display:none;">
+              <h4 id="sourceEditorTitle" class="sectionTitle" style="margin-top:0;">Agregar fuente</h4>
+              <div class="inputContainer">
+                <label class="inputLabel inputLabelUnfocused" for="newName">Nombre de la fuente</label>
+                <input id="newName" is="emby-input" name="newName" type="text" class="emby-input" placeholder="Proveedor IPTV" autocomplete="off"/>
+              </div>
+              <div class="inputContainer">
+                <label class="inputLabel inputLabelUnfocused" for="newUrl">URL del M3U</label>
+                <input id="newUrl" is="emby-input" name="newUrl" type="text" class="emby-input" placeholder="https://proveedor.com/lista.m3u" autocomplete="off"/>
+              </div>
+              <div class="jt-toolbar">
+                <button id="btnSaveSource" is="emby-button" type="button" class="raised button-submit emby-button jt-primary"><span>Guardar fuente</span></button>
+                <button id="btnCancelSource" is="emby-button" type="button" class="emby-button jt-danger"><span>Cancelar</span></button>
+              </div>
+            </div>
+
+            <div class="jt-tableWrap">
+              <table class="jt-table" aria-label="Tabla de fuentes configuradas">
+                <thead>
+                  <tr>
+                    <th>Fuente</th>
+                    <th>URL</th>
+                    <th>Estado</th>
+                    <th>Ultima sync</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="sourcesTableBody"></tbody>
+              </table>
+            </div>
+
+            <div id="globalStatus" class="jt-status-line jt-note"></div>
+          </div>
+        </fieldset>
+
+        <fieldset class="verticalSection-extrabottompadding jt-card">
+          <legend class="sectionTitle"><h3>Tuner en Jellyfin</h3></legend>
+          <div class="configSection">
+            <div class="fieldDescription">Usa esta URL en Live TV -> Agregar tuner -> M3U Tuner.</div>
+
+            <div class="inputContainer jt-tuner-box">
+              <label class="inputLabel inputLabelUnfocused" for="tunerUrlInput">URL del tuner</label>
+              <input id="tunerUrlInput" is="emby-input" type="text" class="emby-input" readonly />
+            </div>
+
+            <div class="jt-toolbar">
+              <button id="btnCopyTuner" is="emby-button" type="button" class="raised button-submit emby-button jt-primary"><span>Copiar URL</span></button>
+              <button id="btnTestM3u" is="emby-button" type="button" class="emby-button"><span>Probar M3U</span></button>
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset class="verticalSection-extrabottompadding jt-card">
+          <legend class="sectionTitle"><h3>Configuracion</h3></legend>
+          <div class="configSection">
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="TokenRefreshMarginSeconds">Margen renovacion token (seg)</label>
+              <input id="TokenRefreshMarginSeconds" is="emby-input" name="TokenRefreshMarginSeconds" type="number" min="5" max="300" class="emby-input"/>
+            </div>
+
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="RequestTimeoutSeconds">Timeout peticiones (seg)</label>
+              <input id="RequestTimeoutSeconds" is="emby-input" name="RequestTimeoutSeconds" type="number" min="5" max="120" class="emby-input"/>
+            </div>
+
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="MaxRedirects">Max redirecciones</label>
+              <input id="MaxRedirects" is="emby-input" name="MaxRedirects" type="number" min="1" max="30" class="emby-input"/>
+            </div>
+
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="UserAgent">User-Agent</label>
+              <input id="UserAgent" is="emby-input" name="UserAgent" type="text" class="emby-input"/>
+            </div>
+
+            <div class="checkboxContainer">
+              <input id="AutoRegisterTuner" name="AutoRegisterTuner" type="checkbox"/>
+              <label class="checkboxLabel emby-checkbox-label" for="AutoRegisterTuner">Auto-registrar tuner en Live TV</label>
+            </div>
+
+            <div class="checkboxContainer">
+              <input id="VerboseLogging" name="VerboseLogging" type="checkbox"/>
+              <label class="checkboxLabel emby-checkbox-label" for="VerboseLogging">Logging detallado (debug)</label>
+            </div>
+
+            <div class="jt-toolbar" style="margin-top:12px;">
+              <button id="btnSaveAll" is="emby-button" type="button" class="raised button-submit emby-button jt-primary"><span>Guardar configuracion</span></button>
+            </div>
+            <div id="saveStatus" class="jt-status-line jt-note"></div>
+          </div>
+        </fieldset>
+
+        <fieldset class="verticalSection-extrabottompadding jt-card">
+          <legend class="sectionTitle"><h3>Estado del plugin</h3></legend>
+          <div class="configSection">
+            <div class="jt-health">
+              <span id="healthDot" class="jt-dot wait"></span>
+              <span id="pingStatusText">Verificando estado...</span>
+            </div>
+
+            <div class="jt-toolbar">
+              <button id="btnOpenLogs" is="emby-button" type="button" class="emby-button jt-danger"><span>Abrir logs</span></button>
+            </div>
+            <div class="fieldDescription jt-muted">Se abriran las ultimas lineas del log del plugin en una nueva pestaña.</div>
+          </div>
+        </fieldset>
+      </form>
+    </div>
+  </div>
+
+  <script type="text/javascript">
+    (function () {
+      'use strict';
+
+      var pluginId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+      var state = {
+        page: null,
+        cfg: null,
+        wired: false,
+        bootstrapped: false,
+        lastBootstrapAt: 0,
+        editorIndex: -1,
+        retryTimer: null,
+        pingTimer: null
+      };
+
+      function tryGet(fn) {
+        try {
+          return fn();
+        } catch (error) {
+          return null;
+        }
+      }
+
+      function findPage() {
+        var pages = document.querySelectorAll('#JellyTVConfigPage');
+        return pages.length ? pages[pages.length - 1] : null;
+      }
+
+      function ensurePage(page) {
+        if (page && page !== state.page) {
+          state.page = page;
+          state.wired = false;
+          state.bootstrapped = false;
+        }
+
+        if (!state.page || !document.body.contains(state.page)) {
+          var latest = findPage();
+          if (latest !== state.page) {
+            state.page = latest;
+            state.wired = false;
+            state.bootstrapped = false;
+          }
+        }
+
+        return state.page;
+      }
+
+      function q(id) {
+        var page = ensurePage();
+        return page ? page.querySelector('#' + id) : null;
+      }
+
+      function setStatus(id, msg, isError) {
+        var el = q(id);
+        if (!el) {
+          return;
+        }
+        el.textContent = msg || '';
+        el.style.color = isError ? '#f44336' : '#4caf50';
+      }
+
+      function clearStatusLater(id, msg, delayMs) {
+        setTimeout(function () {
+          var el = q(id);
+          if (el && el.textContent === msg) {
+            el.textContent = '';
+          }
+        }, delayMs || 3000);
+      }
+
+      function getInt(id, fallback) {
+        var el = q(id);
+        if (!el) {
+          return fallback;
+        }
+        var value = Number.parseInt(el.value, 10);
+        return Number.isNaN(value) ? fallback : value;
+      }
+
+      function setBusy(isBusy) {
+        var ids = ['btnSaveAll', 'btnSaveSource', 'btnShowSourceEditor', 'btnSyncSources'];
+        ids.forEach(function (id) {
+          var btn = q(id);
+          if (btn) {
+            btn.disabled = !!isBusy;
+          }
+        });
+      }
+
+      function getApiClient() {
+        if (typeof ApiClient !== 'undefined' && ApiClient) {
+          return ApiClient;
+        }
+        if (typeof globalThis !== 'undefined' && globalThis.ApiClient) {
+          return globalThis.ApiClient;
+        }
+
+        var parentApi = tryGet(function () {
+          return globalThis.window && globalThis.window.parent ? globalThis.window.parent.ApiClient : null;
+        });
+        if (parentApi) {
+          return parentApi;
+        }
+
+        var topApi = tryGet(function () {
+          return globalThis.window && globalThis.window.top ? globalThis.window.top.ApiClient : null;
+        });
+        if (topApi) {
+          return topApi;
+        }
+
+        return null;
+      }
+
+      function getDashboard() {
+        if (typeof Dashboard !== 'undefined' && Dashboard) {
+          return Dashboard;
+        }
+        if (typeof globalThis !== 'undefined' && globalThis.Dashboard) {
+          return globalThis.Dashboard;
+        }
+
+        var parentDashboard = tryGet(function () {
+          return globalThis.window && globalThis.window.parent ? globalThis.window.parent.Dashboard : null;
+        });
+        if (parentDashboard) {
+          return parentDashboard;
+        }
+
+        var topDashboard = tryGet(function () {
+          return globalThis.window && globalThis.window.top ? globalThis.window.top.Dashboard : null;
+        });
+        if (topDashboard) {
+          return topDashboard;
+        }
+
+        return null;
+      }
+
+      function getAccessToken() {
+        var api = getApiClient();
+        if (api && typeof api.accessToken === 'function') {
+          var token = api.accessToken();
+          if (token) {
+            return token;
+          }
+        }
+
+        if (api && api._serverInfo && typeof api._serverInfo.AccessToken === 'string') {
+          return api._serverInfo.AccessToken;
+        }
+
+        return '';
+      }
+
+      function appendApiKey(url) {
+        var token = getAccessToken();
+        if (!token) {
+          return url;
+        }
+
+        if (url.indexOf('api_key=') !== -1) {
+          return url;
+        }
+
+        return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'api_key=' + encodeURIComponent(token);
+      }
+
+      function getPathUrl(path) {
+        var api = getApiClient();
+        if (api && typeof api.getUrl === 'function') {
+          return api.getUrl(path);
+        }
+
+        if (globalThis.location && globalThis.location.origin) {
+          return globalThis.location.origin + path;
+        }
+
+        return path;
+      }
+
+      function getTunerUrl() {
+        return getPathUrl('/JellyTV/m3u');
+      }
+
+      function getConfigEndpoint() {
+        var base = '/Plugins/' + encodeURIComponent(pluginId) + '/Configuration';
+        return appendApiKey(base);
+      }
+
+      function getConfigDirect() {
+        return fetch(getConfigEndpoint(), {
+          method: 'GET',
+          credentials: 'include'
+        }).then(function (response) {
+          if (!response.ok) {
+            throw new Error('HTTP ' + response.status + ' leyendo configuracion');
+          }
+          return response.json();
+        });
+      }
+
+      function saveConfigDirect(config) {
+        return fetch(getConfigEndpoint(), {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(config)
+        }).then(function (response) {
+          if (!response.ok) {
+            throw new Error('HTTP ' + response.status + ' guardando configuracion');
+          }
+          return response;
+        });
+      }
+
+      function getConfig() {
+        var api = getApiClient();
+        if (api && typeof api.getPluginConfiguration === 'function') {
+          return api.getPluginConfiguration(pluginId);
+        }
+        return getConfigDirect();
+      }
+
+      function saveConfig(config) {
+        var api = getApiClient();
+        if (api && typeof api.updatePluginConfiguration === 'function') {
+          return api.updatePluginConfiguration(pluginId, config);
+        }
+        return saveConfigDirect(config);
+      }
+
+      function showEditor(isEditMode, index) {
+        var panel = q('sourceEditor');
+        var title = q('sourceEditorTitle');
+        var button = q('btnShowSourceEditor');
+        var nameInput = q('newName');
+        var urlInput = q('newUrl');
+
+        if (!panel || !title || !button || !nameInput || !urlInput) {
+          return;
+        }
+
+        panel.style.display = 'block';
+
+        if (isEditMode && state.cfg && Array.isArray(state.cfg.Sources) && state.cfg.Sources[index]) {
+          var source = state.cfg.Sources[index];
+          state.editorIndex = index;
+          title.textContent = 'Editar fuente';
+          button.textContent = 'Agregar nueva fuente';
+          nameInput.value = source.Name || '';
+          urlInput.value = source.Url || '';
+        } else {
+          state.editorIndex = -1;
+          title.textContent = 'Agregar fuente';
+          button.textContent = 'Ocultar editor';
+          nameInput.value = '';
+          urlInput.value = '';
+        }
+
+        nameInput.focus();
+      }
+
+      function hideEditor() {
+        var panel = q('sourceEditor');
+        var button = q('btnShowSourceEditor');
+        if (panel) {
+          panel.style.display = 'none';
+        }
+        if (button) {
+          button.textContent = 'Agregar fuente';
+        }
+        state.editorIndex = -1;
+      }
+
+      function renderSourcesTable() {
+        var body = q('sourcesTableBody');
+        if (!body) {
+          return;
+        }
+
+        body.innerHTML = '';
+
+        if (!state.cfg || !Array.isArray(state.cfg.Sources) || state.cfg.Sources.length === 0) {
+          var emptyRow = document.createElement('tr');
+          var emptyCell = document.createElement('td');
+          emptyCell.colSpan = 5;
+          emptyCell.className = 'jt-muted';
+          emptyCell.textContent = 'No hay fuentes configuradas.';
+          emptyRow.appendChild(emptyCell);
+          body.appendChild(emptyRow);
+          return;
+        }
+
+        state.cfg.Sources.forEach(function (source, index) {
+          var row = document.createElement('tr');
+
+          var colName = document.createElement('td');
+          colName.textContent = source.Name || '(sin nombre)';
+          row.appendChild(colName);
+
+          var colUrl = document.createElement('td');
+          var urlSpan = document.createElement('div');
+          urlSpan.className = 'jt-url';
+          urlSpan.textContent = source.Url || '';
+          colUrl.appendChild(urlSpan);
+          row.appendChild(colUrl);
+
+          var colState = document.createElement('td');
+          colState.textContent = source.IsEnabled ? 'Activa' : 'Desactivada';
+          colState.style.color = source.IsEnabled ? '#4caf50' : '#f44336';
+          row.appendChild(colState);
+
+          var colSync = document.createElement('td');
+          if (source.LastError) {
+            colSync.textContent = 'Error';
+            var detail = document.createElement('div');
+            detail.className = 'jt-small';
+            detail.style.color = '#f44336';
+            detail.textContent = source.LastError;
+            colSync.appendChild(detail);
+          } else if (source.LastFetched) {
+            colSync.textContent = new Date(source.LastFetched).toLocaleString();
+            var count = document.createElement('div');
+            count.className = 'jt-small';
+            count.textContent = (source.LastChannelCount || 0) + ' canales';
+            colSync.appendChild(count);
+          } else {
+            colSync.textContent = 'Sin sincronizacion';
+          }
+          row.appendChild(colSync);
+
+          var colActions = document.createElement('td');
+          var actions = document.createElement('div');
+          actions.className = 'jt-actions';
+
+          var editBtn = document.createElement('button');
+          editBtn.type = 'button';
+          editBtn.className = 'raised button-submit emby-button jt-inline-btn jt-primary';
+          editBtn.textContent = 'Editar';
+          editBtn.addEventListener('click', function () {
+            showEditor(true, index);
+          });
+          actions.appendChild(editBtn);
+
+          var toggleBtn = document.createElement('button');
+          toggleBtn.type = 'button';
+          toggleBtn.className = 'emby-button jt-inline-btn ' + (source.IsEnabled ? 'jt-danger' : 'jt-primary');
+          toggleBtn.textContent = source.IsEnabled ? 'Desactivar' : 'Activar';
+          toggleBtn.addEventListener('click', function () {
+            toggleSource(index);
+          });
+          actions.appendChild(toggleBtn);
+
+          var deleteBtn = document.createElement('button');
+          deleteBtn.type = 'button';
+          deleteBtn.className = 'emby-button jt-inline-btn jt-danger';
+          deleteBtn.textContent = 'Eliminar';
+          deleteBtn.addEventListener('click', function () {
+            deleteSource(index);
+          });
+          actions.appendChild(deleteBtn);
+
+          colActions.appendChild(actions);
+          row.appendChild(colActions);
+
+          body.appendChild(row);
+        });
+      }
+
+      function applyConfig(config) {
+        state.cfg = config || {};
+        if (!Array.isArray(state.cfg.Sources)) {
+          state.cfg.Sources = [];
+        }
+
+        var tokenRefresh = q('TokenRefreshMarginSeconds');
+        var timeout = q('RequestTimeoutSeconds');
+        var redirects = q('MaxRedirects');
+        var userAgent = q('UserAgent');
+        var autoRegister = q('AutoRegisterTuner');
+        var verbose = q('VerboseLogging');
+
+        if (tokenRefresh) tokenRefresh.value = state.cfg.TokenRefreshMarginSeconds || 30;
+        if (timeout) timeout.value = state.cfg.RequestTimeoutSeconds || 15;
+        if (redirects) redirects.value = state.cfg.MaxRedirects || 10;
+        if (userAgent) userAgent.value = state.cfg.UserAgent || '';
+        if (autoRegister) autoRegister.checked = state.cfg.AutoRegisterTuner !== false;
+        if (verbose) verbose.checked = !!state.cfg.VerboseLogging;
+
+        renderSourcesTable();
+      }
+
+      function collectConfigFromForm() {
+        if (!state.cfg) {
+          state.cfg = {};
+        }
+        if (!Array.isArray(state.cfg.Sources)) {
+          state.cfg.Sources = [];
+        }
+
+        state.cfg.TokenRefreshMarginSeconds = getInt('TokenRefreshMarginSeconds', 30);
+        state.cfg.RequestTimeoutSeconds = getInt('RequestTimeoutSeconds', 15);
+        state.cfg.MaxRedirects = getInt('MaxRedirects', 10);
+
+        var ua = q('UserAgent');
+        var autoRegister = q('AutoRegisterTuner');
+        var verbose = q('VerboseLogging');
+
+        state.cfg.UserAgent = ua ? ua.value.trim() : '';
+        state.cfg.AutoRegisterTuner = !!(autoRegister && autoRegister.checked);
+        state.cfg.VerboseLogging = !!(verbose && verbose.checked);
+
+        return state.cfg;
+      }
+
+      function loadConfig() {
+        setBusy(true);
+        var dashboard = getDashboard();
+        if (dashboard && typeof dashboard.showLoadingMsg === 'function') {
+          dashboard.showLoadingMsg();
+        }
+
+        getConfig().then(function (config) {
+          applyConfig(config);
+          setStatus('globalStatus', '', false);
+          setStatus('saveStatus', '', false);
+        }).catch(function (error) {
+          var detail = error && error.message ? error.message : String(error);
+          setStatus('globalStatus', 'Error cargando configuracion: ' + detail, true);
+        }).finally(function () {
+          setBusy(false);
+          if (dashboard && typeof dashboard.hideLoadingMsg === 'function') {
+            dashboard.hideLoadingMsg();
+          }
+        });
+      }
+
+      function saveAll() {
+        if (!state.cfg) {
+          setStatus('saveStatus', 'Config aun no cargada.', true);
+          return;
+        }
+
+        var config = collectConfigFromForm();
+        var dashboard = getDashboard();
+
+        setBusy(true);
+        if (dashboard && typeof dashboard.showLoadingMsg === 'function') {
+          dashboard.showLoadingMsg();
+        }
+
+        saveConfig(config).then(function (result) {
+          if (dashboard && typeof dashboard.processPluginConfigurationUpdateResult === 'function') {
+            dashboard.processPluginConfigurationUpdateResult(result);
+          }
+          var ok = 'Configuracion guardada correctamente.';
+          setStatus('saveStatus', ok, false);
+          clearStatusLater('saveStatus', ok, 2600);
+        }).catch(function (error) {
+          var detail = error && error.message ? error.message : String(error);
+          setStatus('saveStatus', 'Error guardando: ' + detail, true);
+        }).finally(function () {
+          setBusy(false);
+          if (dashboard && typeof dashboard.hideLoadingMsg === 'function') {
+            dashboard.hideLoadingMsg();
+          }
+        });
+      }
+
+      function syncSources() {
+        var dashboard = getDashboard();
+
+        setBusy(true);
+        if (dashboard && typeof dashboard.showLoadingMsg === 'function') {
+          dashboard.showLoadingMsg();
+        }
+
+        setStatus('globalStatus', 'Sincronizando fuentes...', false);
+
+        fetch(getPathUrl('/JellyTV/m3u?refresh=true'), {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store'
+        }).then(function (response) {
+          if (!response.ok) {
+            throw new Error('HTTP ' + response.status + ' sincronizando fuentes');
+          }
+          return response.text();
+        }).then(function () {
+          return getConfig();
+        }).then(function (config) {
+          applyConfig(config);
+          var ok = 'Sincronizacion completada.';
+          setStatus('globalStatus', ok, false);
+          clearStatusLater('globalStatus', ok, 2500);
+        }).catch(function (error) {
+          var detail = error && error.message ? error.message : String(error);
+          setStatus('globalStatus', 'Error sincronizando: ' + detail, true);
+        }).finally(function () {
+          setBusy(false);
+          if (dashboard && typeof dashboard.hideLoadingMsg === 'function') {
+            dashboard.hideLoadingMsg();
+          }
+        });
+      }
+
+      function saveSourceFromEditor() {
+        if (!state.cfg) {
+          setStatus('globalStatus', 'Config aun no cargada.', true);
+          return;
+        }
+
+        var wasEditing = state.editorIndex >= 0;
+
+        var nameInput = q('newName');
+        var urlInput = q('newUrl');
+
+        var name = nameInput ? nameInput.value.trim() : '';
+        var url = urlInput ? urlInput.value.trim() : '';
+
+        if (!name || !url) {
+          setStatus('globalStatus', 'Nombre y URL son obligatorios.', true);
+          return;
+        }
+
+        if (!Array.isArray(state.cfg.Sources)) {
+          state.cfg.Sources = [];
+        }
+
+        if (state.editorIndex >= 0 && state.cfg.Sources[state.editorIndex]) {
+          state.cfg.Sources[state.editorIndex].Name = name;
+          state.cfg.Sources[state.editorIndex].Url = url;
+        } else {
+          state.cfg.Sources.push({
+            Id: Date.now().toString(36) + Math.random().toString(36).slice(2),
+            Name: name,
+            Url: url,
+            IsEnabled: true,
+            LastFetched: null,
+            LastChannelCount: 0,
+            LastError: null
+          });
+        }
+
+        saveConfig(state.cfg).then(function () {
+          renderSourcesTable();
+          hideEditor();
+          var ok = wasEditing ? 'Fuente actualizada.' : 'Fuente agregada.';
+          setStatus('globalStatus', ok, false);
+          clearStatusLater('globalStatus', ok, 2500);
+        }).catch(function (error) {
+          var detail = error && error.message ? error.message : String(error);
+          setStatus('globalStatus', 'Error guardando fuente: ' + detail, true);
+        });
+      }
+
+      function deleteSource(index) {
+        if (!state.cfg || !Array.isArray(state.cfg.Sources)) {
+          return;
+        }
+
+        if (!globalThis.confirm('Eliminar esta fuente?')) {
+          return;
+        }
+
+        var removed = state.cfg.Sources.splice(index, 1);
+        saveConfig(state.cfg).then(function () {
+          renderSourcesTable();
+          var ok = 'Fuente eliminada.';
+          setStatus('globalStatus', ok, false);
+          clearStatusLater('globalStatus', ok, 2500);
+        }).catch(function (error) {
+          state.cfg.Sources.splice(index, 0, removed[0]);
+          var detail = error && error.message ? error.message : String(error);
+          setStatus('globalStatus', 'Error eliminando: ' + detail, true);
+        });
+      }
+
+      function toggleSource(index) {
+        if (!state.cfg || !Array.isArray(state.cfg.Sources) || !state.cfg.Sources[index]) {
+          return;
+        }
+
+        state.cfg.Sources[index].IsEnabled = !state.cfg.Sources[index].IsEnabled;
+        saveConfig(state.cfg).then(function () {
+          renderSourcesTable();
+        }).catch(function (error) {
+          state.cfg.Sources[index].IsEnabled = !state.cfg.Sources[index].IsEnabled;
+          var detail = error && error.message ? error.message : String(error);
+          setStatus('globalStatus', 'Error actualizando fuente: ' + detail, true);
+        });
+      }
+
+      function updateHealth(kind, text) {
+        var dot = q('healthDot');
+        var label = q('pingStatusText');
+        if (!dot || !label) {
+          return;
+        }
+
+        dot.className = 'jt-dot ' + kind;
+        label.textContent = text;
+      }
+
+      function checkPing() {
+        var url = getPathUrl('/JellyTV/ping');
+        fetch(url, { credentials: 'include' }).then(function (response) {
+          if (!response.ok) {
+            throw new Error('HTTP ' + response.status);
+          }
+          return response.text();
+        }).then(function (text) {
+          var isAlive = /ALIVE\s*=\s*true/i.test(text);
+          var sourceMatch = /Sources\s*=\s*(\d+)/i.exec(text);
+          var sources = sourceMatch ? Number.parseInt(sourceMatch[1], 10) : 0;
+          if (Number.isNaN(sources)) {
+            sources = 0;
+          }
+
+          if (isAlive) {
+            updateHealth('ok', 'Activo, ' + sources + ' fuente(s) configurada(s)');
+          } else {
+            updateHealth('fail', 'Sin respuesta del plugin');
+          }
+        }).catch(function () {
+          updateHealth('fail', 'Sin respuesta del plugin');
+        });
+      }
+
+      function refreshTunerField() {
+        var tuner = q('tunerUrlInput');
+        if (tuner) {
+          tuner.value = getTunerUrl();
+        }
+      }
+
+      function bindUi() {
+        if (state.wired) {
+          return;
+        }
+
+        var form = q('JellyTVConfigForm');
+        var showEditorBtn = q('btnShowSourceEditor');
+        var saveSourceBtn = q('btnSaveSource');
+        var cancelSourceBtn = q('btnCancelSource');
+        var saveAllBtn = q('btnSaveAll');
+        var syncSourcesBtn = q('btnSyncSources');
+        var copyTunerBtn = q('btnCopyTuner');
+        var testM3uBtn = q('btnTestM3u');
+        var openLogsBtn = q('btnOpenLogs');
+
+        if (form) {
+          form.addEventListener('submit', function (event) {
+            event.preventDefault();
+            return false;
+          });
+        }
+
+        if (showEditorBtn) {
+          showEditorBtn.addEventListener('click', function () {
+            var panel = q('sourceEditor');
+            if (panel && panel.style.display !== 'none') {
+              hideEditor();
+            } else {
+              showEditor(false, -1);
+            }
+          });
+        }
+
+        if (saveSourceBtn) {
+          saveSourceBtn.addEventListener('click', saveSourceFromEditor);
+        }
+
+        if (cancelSourceBtn) {
+          cancelSourceBtn.addEventListener('click', hideEditor);
+        }
+
+        if (saveAllBtn) {
+          saveAllBtn.addEventListener('click', saveAll);
+        }
+
+        if (syncSourcesBtn) {
+          syncSourcesBtn.addEventListener('click', syncSources);
+        }
+
+        if (copyTunerBtn) {
+          copyTunerBtn.addEventListener('click', function () {
+            var tuner = getTunerUrl();
+            navigator.clipboard.writeText(tuner).then(function () {
+              var ok = 'URL copiada al portapapeles.';
+              setStatus('globalStatus', ok, false);
+              clearStatusLater('globalStatus', ok, 2200);
+            });
+          });
+        }
+
+        if (testM3uBtn) {
+          testM3uBtn.addEventListener('click', function () {
+            globalThis.open(getTunerUrl(), '_blank');
+          });
+        }
+
+        if (openLogsBtn) {
+          openLogsBtn.addEventListener('click', function () {
+            var logsUrl = getPathUrl('/JellyTV/log?lines=600');
+            globalThis.open(logsUrl, '_blank');
+          });
+        }
+
+        state.wired = true;
+      }
+
+      function ensurePingTimer() {
+        if (state.pingTimer) {
+          return;
+        }
+
+        state.pingTimer = setInterval(function () {
+          checkPing();
+        }, 30000);
+      }
+
+      function hasDom() {
+        return !!(q('JellyTVConfigForm') && q('sourcesTableBody') && q('btnSaveAll') && q('healthDot'));
+      }
+
+      function scheduleRetry() {
+        if (state.retryTimer) {
+          return;
+        }
+
+        state.retryTimer = setTimeout(function () {
+          state.retryTimer = null;
+          bootstrap();
+        }, 280);
+      }
+
+      function bootstrap(page) {
+        var activePage = ensurePage(page);
+        if (!activePage) {
+          scheduleRetry();
+          return;
+        }
+
+        var now = Date.now();
+        if (state.bootstrapped && (now - state.lastBootstrapAt) < 1200) {
+          return;
+        }
+        state.lastBootstrapAt = now;
+
+        var markupPluginId = activePage.dataset ? activePage.dataset.pluginuniqueid : '';
+        if (markupPluginId) {
+          pluginId = markupPluginId;
+        }
+
+        if (!hasDom()) {
+          scheduleRetry();
+          return;
+        }
+
+        refreshTunerField();
+        bindUi();
+
+        if (!state.bootstrapped) {
+          ensurePingTimer();
+          state.bootstrapped = true;
+        }
+
+        loadConfig();
+        checkPing();
+
+        globalThis.__JellyTVConfigBootstrapped = true;
+      }
+
+      function bindPageShow() {
+        var page = ensurePage();
+        if (!page) {
+          scheduleRetry();
+          return;
+        }
+
+        if (page.dataset && page.dataset.jtBound === '1') {
+          return;
+        }
+
+        if (page.dataset) {
+          page.dataset.jtBound = '1';
+        }
+
+        page.addEventListener('pageshow', function (event) {
+          bootstrap(event.currentTarget);
+        });
+      }
+
+      bindPageShow();
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function () {
+          bindPageShow();
+          bootstrap();
+        });
+      } else {
+        bootstrap();
+      }
+
+      globalThis.addEventListener('hashchange', function () {
+        if (globalThis.location && globalThis.location.hash && globalThis.location.hash.includes('configurationpage?name=JellyTV')) {
+          bindPageShow();
+          bootstrap();
+        }
+      });
+    })();
+  </script>
+</div>
+</body>
+</html>
