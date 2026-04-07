@@ -37,11 +37,18 @@ public class RedirectResolverService
     {
         var config = Plugin.Instance?.Configuration;
         var maxRedirects = config?.MaxRedirects ?? 10;
-        var userAgent = config?.UserAgent ?? "Mozilla/5.0 (compatible; JellyTV/1.0)";
+
+        // Strategy similar to robust player clients:
+        // 1) Try automatic redirect handling first (browser-like behavior + shared cookies).
+        // 2) Fallback to manual redirect walk for full diagnostics/control.
+        var autoResolved = await TryResolveWithAutoRedirectAsync(originalUrl, cancellationToken).ConfigureAwait(false);
+        if (autoResolved is not null)
+        {
+            return autoResolved;
+        }
 
         // Use a client that does NOT auto-follow redirects so we can track them
         var client = _httpClientFactory.CreateClient("IptvNoRedirect");
-        client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", userAgent);
 
         var currentUrl = originalUrl;
         var redirectCount = 0;
@@ -135,10 +142,20 @@ public class RedirectResolverService
         var tokenExpiry = TryParseTokenExpiry(currentUrl);
         var tokenValue = TryExtractTokenFromUrl(currentUrl);
 
+        // For tokenized streams, use the penultimate redirect URL as the playlist poll URL.
+        // This means each playlist poll follows a fresh token-generating redirect (e.g. alfa →
+        // tuenisix?newToken) rather than re-using the short-lived query-string token directly.
+        // The short-lived ?token= in the final URL is effectively single-use; re-polying it
+        // directly causes 401/403 within seconds and triggers unnecessary renewal loops.
+        string playlistPollUrl = currentUrl;
+        if (!string.IsNullOrEmpty(tokenValue) && redirectChain.Count >= 2)
+            playlistPollUrl = redirectChain[redirectChain.Count - 2];
+
         var resolved = new ResolvedStream
         {
             OriginalUrl = originalUrl,
             FinalUrl = currentUrl,
+            PlaylistPollUrl = playlistPollUrl,
             BaseUrl = baseUrl,
             ContentType = contentType,
             IsHls = isHls,
@@ -167,6 +184,71 @@ public class RedirectResolverService
         catch { }
 
         return resolved;
+    }
+
+    private async Task<ResolvedStream?> TryResolveWithAutoRedirectAsync(
+        string originalUrl,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var client = _httpClientFactory.CreateClient("JellyTV");
+            using var request = new HttpRequestMessage(HttpMethod.Get, originalUrl);
+            using var response = await client
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                PluginLog.Warn($"[RESOLVE-AUTO] Non-success HTTP {(int)response.StatusCode} at {originalUrl}; falling back to manual resolver");
+                return null;
+            }
+
+            var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? originalUrl;
+            var contentType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+            string? initialPlaylistContent = null;
+
+            if (IsHlsUrl(finalUrl, contentType))
+            {
+                try
+                {
+                    initialPlaylistContent = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Non-fatal, plugin can fetch playlist later.
+                }
+            }
+
+            var redirectChain = new List<string> { originalUrl };
+            if (!string.Equals(finalUrl, originalUrl, StringComparison.Ordinal))
+            {
+                redirectChain.Add(finalUrl);
+            }
+
+            var resolved = new ResolvedStream
+            {
+                OriginalUrl = originalUrl,
+                FinalUrl = finalUrl,
+                PlaylistPollUrl = finalUrl, // auto-resolve doesn't expose chain; fallback to FinalUrl
+                BaseUrl = BuildBaseUrl(finalUrl),
+                ContentType = contentType,
+                IsHls = IsHlsUrl(finalUrl, contentType),
+                TokenExpiry = TryParseTokenExpiry(finalUrl),
+                TokenValue = TryExtractTokenFromUrl(finalUrl),
+                ResolvedAt = DateTimeOffset.UtcNow,
+                RedirectChain = redirectChain,
+                InitialPlaylistContent = initialPlaylistContent,
+            };
+
+            PluginLog.Info($"[RESOLVE-AUTO] Final: {finalUrl} | HLS={resolved.IsHls} | TokenPresent={!string.IsNullOrEmpty(resolved.TokenValue)}");
+            return resolved;
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"[RESOLVE-AUTO] Failed for {originalUrl}: {ex.Message}; falling back to manual resolver");
+            return null;
+        }
     }
 
     private string? TryExtractTokenFromUrl(string url)

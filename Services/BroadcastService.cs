@@ -78,6 +78,7 @@ public sealed class BroadcastPump : IDisposable
     private static readonly TimeSpan IdleStopDelay  = TimeSpan.FromSeconds(15);  // stop pump quickly after last viewer leaves
     private static readonly TimeSpan DefaultPoll    = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ErrorBackoff   = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan AuthRetryDelay = TimeSpan.FromMilliseconds(1200);
 
     // ── Subscriber fan-out state ────────────────────────────────────────────────
     private readonly object                      _sync        = new();
@@ -87,10 +88,21 @@ public sealed class BroadcastPump : IDisposable
     // ── HLS polling state ──────────────────────────────────────────────────────
     private readonly Queue<string>   _seenOrder    = new();
     private readonly HashSet<string> _seenSegments = new(StringComparer.Ordinal);
+    // The stable URL used for each playlist poll — for tokenized streams this is the
+    // penultimate redirect URL (e.g. alfa.7057460.xyz) so that every poll follows a
+    // fresh token-generating redirect instead of re-using an expired ?token= directly.
     private string? _mediaPlaylistUrl;
+    // The effective URL after the playlist redirect resolves (e.g. tuenisix?freshToken).
+    // Used for BuildBaseUrl so that relative segment paths (/hlsr/TOKEN/...) resolve
+    // against the correct media server, not the alfa redirect server.
+    private string? _mediaBaseUrl;
     // True once we have consumed the body that the resolver fetched during resolution.
     // Prevents a redundant second GET to a rate-limited provider URL on the very first poll.
     private bool _initialPlaylistConsumed;
+    // Rolling window continuity tracking — mirrors the PS1 check: p2.Seq ≤ p1.Seq + p1.Segs.Count.
+    // Reset to -1 on every renewal/re-resolve so the first new window is never flagged as a gap.
+    private int  _lastMediaSeq  = -1;
+    private int  _lastSegCount  =  0;
 
     // ── Pump lifecycle ─────────────────────────────────────────────────────────
     private CancellationTokenSource _cts         = new();
@@ -258,12 +270,26 @@ public sealed class BroadcastPump : IDisposable
 
     private async Task PollOnceAsync(CancellationToken ct)
     {
+        if (_sessions.TryGetRenewalBackoffRemaining(_session, out var backoffRemaining))
+        {
+            var wait = backoffRemaining > ErrorBackoff ? ErrorBackoff : backoffRemaining;
+            if (wait > TimeSpan.Zero)
+            {
+                await Task.Delay(wait, ct).ConfigureAwait(false);
+            }
+
+            return;
+        }
+
         if (_sessions.NeedsRenewal(_session))
         {
             await _sessions.RenewSessionAsync(_session, ct).ConfigureAwait(false);
             // Reset so the next iteration uses the fresh body the resolver just fetched.
-            _mediaPlaylistUrl = null;
+            _mediaPlaylistUrl        = null;
+            _mediaBaseUrl            = null;
             _initialPlaylistConsumed = false;
+            _lastMediaSeq            = -1;
+            _lastSegCount            =  0;
         }
 
         var resolved = _session.LastResolved
@@ -289,7 +315,30 @@ public sealed class BroadcastPump : IDisposable
                 if (cachedBody is not null)
                     PluginLog.Info($"[BROADCAST] Using cached playlist body (skipping redundant GET) session={_session.SessionId}");
             }
-            (_mediaPlaylistUrl, cachedPlaylistText) = await ResolveMediaPlaylistUrlAsync(client, resolved, cachedBody, ct).ConfigureAwait(false);
+
+            try
+            {
+                (_mediaPlaylistUrl, cachedPlaylistText) = await ResolveMediaPlaylistUrlAsync(client, resolved, cachedBody, ct).ConfigureAwait(false);
+                // Seed the base URL from the resolver's final URL so relative segment paths
+                // (/hlsr/TOKEN/...) resolve against the correct media server host.
+                if (_mediaBaseUrl is null)
+                    _mediaBaseUrl = resolved.FinalUrl;
+            }
+            catch (HttpRequestException ex) when (IsAuthFailure(ex))
+            {
+                // Do NOT call RenewSessionAsync here: PlaylistPollUrl already points to
+                // alfa so the next poll will naturally follow alfa → tuenisix?freshToken.
+                // Hammering RenewSessionAsync causes the same stale token to be retried
+                // multiple times in quick succession, triggering provider rate-limiting.
+                PluginLog.Warn($"[BROADCAST] Resolve media playlist 401/403 session={_session.SessionId}, retrying via PlaylistPollUrl after backoff");
+                _mediaPlaylistUrl        = null;
+                _mediaBaseUrl            = null;
+                _initialPlaylistConsumed = false;
+                _lastMediaSeq            = -1;
+                _lastSegCount            =  0;
+                await Task.Delay(ErrorBackoff, ct).ConfigureAwait(false);
+                return;
+            }
         }
 
         string playlistText;
@@ -300,40 +349,67 @@ public sealed class BroadcastPump : IDisposable
         }
         else
         {
-            try
+            // Use GetAsync so we can follow the fresh-token redirect (alfa → tuenisix?newToken)
+            // and capture the effective final URL for correct segment base-URL computation.
+            using var playlistResp = await client.GetAsync(_mediaPlaylistUrl, ct).ConfigureAwait(false);
+            if (IsAuthFailure(playlistResp.StatusCode))
             {
-                playlistText = await client.GetStringAsync(_mediaPlaylistUrl, ct).ConfigureAwait(false);
-            }
-            catch (HttpRequestException ex) when (IsAuthFailure(ex))
-            {
-                PluginLog.Warn($"[BROADCAST] Playlist 401/403 session={_session.SessionId}, renewing token");
-                await _sessions.RenewSessionAsync(_session, ct).ConfigureAwait(false);
-                _mediaPlaylistUrl = null;
-                _initialPlaylistConsumed = false;  // allow next poll to use the fresh body from renewal
+                // Do NOT call RenewSessionAsync: the next poll will hit PlaylistPollUrl (alfa)
+                // which issues a fresh token-redirect automatically.
+                // Calling RenewSessionAsync here would hammer the same stale candidates
+                // and trigger provider rate-limiting within seconds.
+                PluginLog.Warn($"[BROADCAST] Playlist 401/403 session={_session.SessionId}, retrying via PlaylistPollUrl after backoff");
+                _mediaPlaylistUrl        = null;
+                _mediaBaseUrl            = null;
+                _initialPlaylistConsumed = false;
+                _lastMediaSeq            = -1;
+                _lastSegCount            =  0;
+                await Task.Delay(ErrorBackoff, ct).ConfigureAwait(false);
                 return;
             }
+            if (!playlistResp.IsSuccessStatusCode)
+                throw new HttpRequestException($"Playlist fetch failed: {(int)playlistResp.StatusCode}", null, playlistResp.StatusCode);
+
+            playlistText = await playlistResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            // Update base URL from the effective URL after redirect (e.g. tuenisix?freshToken).
+            var responseUrl = playlistResp.RequestMessage?.RequestUri?.ToString();
+            if (!string.IsNullOrWhiteSpace(responseUrl))
+                _mediaBaseUrl = responseUrl;
         }
 
-        var baseUrl        = BuildBaseUrl(_mediaPlaylistUrl);
+        var baseUrl        = BuildBaseUrl(_mediaBaseUrl ?? _mediaPlaylistUrl!);
         var segments       = ParseMediaSegments(playlistText, baseUrl);
         var targetDuration = ParseTargetDuration(playlistText);
-        var downloadedAny  = await DownloadNewSegmentsAsync(client, segments, ct).ConfigureAwait(false);
+        var mediaSeq       = ParseMediaSequence(playlistText);
 
-        // For token-based streams (single-use tokens), proactively renew ONLY when segments were
-        // actually consumed this cycle.  When downloadedAny=false the live stream hasn't advanced yet;
-        // the reactive 401/403 catch above already handles a stale token on the next GET, so there
-        // is no need for a full 4-hop re-resolve that would just return the same empty playlist and
-        // create 20-30 s gaps between segment bursts.
-        if (resolved.TokenValue is not null && downloadedAny)
+        // Continuity guard: equivalent to the PS1 check `p2.Seq <= p1.Seq + p1.Segs.Count`.
+        // If the new window starts beyond the previous window's range, segments were missed.
+        if (_lastMediaSeq >= 0 && mediaSeq > _lastMediaSeq + _lastSegCount)
         {
-            await _sessions.RenewSessionAsync(_session, ct).ConfigureAwait(false);
-            _mediaPlaylistUrl = null;
+            PluginLog.Warn($"[BROADCAST] Continuity break: expected≤{_lastMediaSeq + _lastSegCount} got={mediaSeq} missed≈{mediaSeq - (_lastMediaSeq + _lastSegCount)} segs session={_session.SessionId}");
+            _mediaPlaylistUrl        = null;
+            _mediaBaseUrl            = null;
             _initialPlaylistConsumed = false;
+            _lastMediaSeq            = -1;
+            _lastSegCount            =  0;
+            return; // re-resolve on next poll to catch up to the live edge
         }
 
-        // Poll quickly right after getting new segments, otherwise wait a full interval.
-        var delay = downloadedAny ? TimeSpan.FromMilliseconds(500) : targetDuration;
-        await Task.Delay(delay, ct).ConfigureAwait(false);
+        _lastMediaSeq = mediaSeq;
+        _lastSegCount = segments.Count;
+
+        UpdateEstimatedTokenExpiry(_session, segments.Count, targetDuration);
+
+        var downloadedAny  = await DownloadNewSegmentsAsync(client, segments, ct).ConfigureAwait(false);
+
+        // Keep renewal demand-driven (NeedsRenewal + reactive 401/403). Renewing on every
+        // successful cycle can rotate playlist tokens too aggressively and cause timeline jumps
+        // when providers return overlapping media windows.
+
+        // Always wait one targetDuration before the next poll — this matches the HLS spec
+        // reload interval and prevents provider rate-limiting from rapid re-requests.
+        // (The previous 500ms fast-poll after downloading segments caused 20+ requests/window.)
+        await Task.Delay(targetDuration, ct).ConfigureAwait(false);
     }
 
     private async Task<bool> DownloadNewSegmentsAsync(
@@ -353,7 +429,6 @@ public sealed class BroadcastPump : IDisposable
 
             downloadedAny = true;
             Publish(data);
-            PluginLog.Info($"[BROADCAST] +seg {data.Length:N0}B subscribers={_activeCount}");
         }
 
         return downloadedAny;
@@ -378,21 +453,24 @@ public sealed class BroadcastPump : IDisposable
         string?           cachedBody,
         CancellationToken ct)
     {
-        var text = cachedBody ?? await client.GetStringAsync(resolved.FinalUrl, ct).ConfigureAwait(false);
+        // Use PlaylistPollUrl (e.g. alfa.7057460.xyz) as the stable cache key.
+        // This URL does a fresh token-generating redirect on each GET, so _mediaPlaylistUrl
+        // never contains an expired ?token= query string.
+        var text = cachedBody ?? await client.GetStringAsync(resolved.PlaylistPollUrl, ct).ConfigureAwait(false);
 
         if (!text.Contains("#EXT-X-STREAM-INF", StringComparison.Ordinal))
         {
-            // Pure media playlist — return the text so the caller can use it directly
-            // without making a second GET to the same rate-limited URL.
-            return (resolved.FinalUrl, text);
+            // Pure media playlist — return PlaylistPollUrl so subsequent polls also go
+            // through the fresh-token redirect, and the text for the first poll.
+            return (resolved.PlaylistPollUrl, text);
         }
 
-        // Master playlist — parse best variant URL.  The caller will need a separate GET
-        // for the variant, but we avoid the GET for the master URL itself.
+        // Master playlist — parse best variant URL.  Base URL uses FinalUrl (the actual
+        // media server) so relative variant paths resolve to the correct host.
         var baseUrl = BuildBaseUrl(resolved.FinalUrl);
         var best    = ParseBestVariantUrl(text, baseUrl);
-        PluginLog.Info($"[BROADCAST] Resolved variant playlist: {best ?? "(fallback to FinalUrl)"}");
-        return (best ?? resolved.FinalUrl, null);
+        PluginLog.Info($"[BROADCAST] Resolved variant playlist: {best ?? "(fallback to PlaylistPollUrl)"}");
+        return (best ?? resolved.PlaylistPollUrl, null);
     }
 
     private static string? ParseBestVariantUrl(string masterText, string baseUrl)
@@ -458,6 +536,20 @@ public sealed class BroadcastPump : IDisposable
         return urls;
     }
 
+    private static int ParseMediaSequence(string playlistText)
+    {
+        const string tag = "#EXT-X-MEDIA-SEQUENCE:";
+        var idx = playlistText.IndexOf(tag, StringComparison.Ordinal);
+        if (idx < 0) return 0;
+
+        var start = idx + tag.Length;
+        var end   = start;
+        while (end < playlistText.Length && char.IsDigit(playlistText[end]))
+            end++;
+
+        return int.TryParse(playlistText[start..end], out var seq) ? seq : 0;
+    }
+
     private static TimeSpan ParseTargetDuration(string playlistText)
     {
         const string tag = "#EXT-X-TARGETDURATION:";
@@ -472,6 +564,39 @@ public sealed class BroadcastPump : IDisposable
         return int.TryParse(playlistText[start..end], out var secs)
             ? TimeSpan.FromSeconds(secs)
             : DefaultPoll;
+    }
+
+    /// <summary>
+    /// For providers that rotate opaque tokens by short playlist windows (e.g. ~60s),
+    /// infer a moving expiry from the current media window size.
+    /// </summary>
+    private static void UpdateEstimatedTokenExpiry(StreamSession session, int segmentCount, TimeSpan targetDuration)
+    {
+        var resolved = session.LastResolved;
+        if (resolved is null)
+        {
+            return;
+        }
+
+        // Only estimate for tokenized URLs; non-token channels must stay renewal-free.
+        if (string.IsNullOrWhiteSpace(resolved.TokenValue))
+        {
+            return;
+        }
+
+        if (segmentCount <= 0 || targetDuration <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        var windowSeconds = segmentCount * targetDuration.TotalSeconds;
+        // Ignore pathological playlists to avoid bad estimates.
+        if (windowSeconds < 15 || windowSeconds > 300)
+        {
+            return;
+        }
+
+        resolved.TokenExpiry = DateTimeOffset.UtcNow.AddSeconds(windowSeconds);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -492,16 +617,13 @@ public sealed class BroadcastPump : IDisposable
             catch (OperationCanceledException) { throw; }
             catch (HttpRequestException ex) when (IsAuthFailure(ex) && attempt == 1)
             {
-                PluginLog.Warn($"[BROADCAST] Segment 401/403 attempt={attempt}, renewing token");
-                try
-                {
-                    await _sessions.RenewSessionAsync(_session, ct).ConfigureAwait(false);
-                    _mediaPlaylistUrl = null; // token is embedded in segment path; force re-resolve
-                }
-                catch (Exception renewEx)
-                {
-                    PluginLog.Error("[BROADCAST] Token renewal failed during segment download", renewEx);
-                }
+                // Reset playlist so the next poll re-resolves via PlaylistPollUrl (alfa),
+                // getting segment URLs with a fresh token. No RenewSessionAsync needed.
+                PluginLog.Warn($"[BROADCAST] Segment 401/403 attempt={attempt}, resetting playlist for fresh token");
+                _mediaPlaylistUrl = null;
+                _mediaBaseUrl     = null;
+                _lastMediaSeq     = -1;
+                _lastSegCount     =  0;
                 // Don't retry the old URL with the old token — let the next poll fetch fresh URLs.
                 return null;
             }
@@ -542,10 +664,11 @@ public sealed class BroadcastPump : IDisposable
     /// </summary>
     private bool MarkSeen(string segUrl)
     {
-        if (_seenSegments.Contains(segUrl)) return false;
+        var dedupKey = BuildSegmentDedupKey(segUrl);
+        if (_seenSegments.Contains(dedupKey)) return false;
 
-        _seenSegments.Add(segUrl);
-        _seenOrder.Enqueue(segUrl);
+        _seenSegments.Add(dedupKey);
+        _seenOrder.Enqueue(dedupKey);
 
         if (_seenOrder.Count > MaxSeenHistory)
         {
@@ -554,6 +677,40 @@ public sealed class BroadcastPump : IDisposable
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Builds a stable deduplication key for a segment URL.
+    /// The key intentionally ignores token wrappers (e.g. /hlsr/{token}/...) so
+    /// rotating tokens do not make already-seen timeline fragments look new.
+    /// </summary>
+    private static string BuildSegmentDedupKey(string segUrl)
+    {
+        try
+        {
+            var uri = new Uri(segUrl, UriKind.Absolute);
+            var path = uri.AbsolutePath;
+
+            const string marker = "/hlsr/";
+            var idx = path.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
+            {
+                var afterMarker = path[(idx + marker.Length)..];
+                var slash = afterMarker.IndexOf('/');
+                if (slash >= 0 && slash + 1 < afterMarker.Length)
+                {
+                    // Remove token part and keep channel/segment identity.
+                    path = afterMarker[(slash + 1)..];
+                }
+            }
+
+            var fileName = Path.GetFileName(path);
+            return string.IsNullOrWhiteSpace(fileName) ? path : fileName;
+        }
+        catch
+        {
+            return segUrl;
+        }
     }
 
     /// <summary>
@@ -570,6 +727,9 @@ public sealed class BroadcastPump : IDisposable
 
     private static bool IsAuthFailure(HttpRequestException ex) =>
         ex.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized;
+
+    private static bool IsAuthFailure(System.Net.HttpStatusCode statusCode) =>
+        statusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized;
 
     // ─────────────────────────────────────────────────────────────────────────
 

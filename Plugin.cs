@@ -32,8 +32,9 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     // Jellyfin tuner host manager -- used to auto-register the proxy tuner host
     private readonly ITunerHostManager _tunerHostManager;
 
-    // The GUID we use for our auto-registered tuner so we can update it, not duplicate it
-    private const string TunerGuid = "iptv-proxy-auto-tuner-v1";
+    // GUID fijo (formato "N" = 32 hex sin guiones, igual al que usa Guid.NewGuid().ToString("N")).
+    // Jellyfin usa el Id para decidir update-vs-insert en SaveTunerHost, garantizando upsert idempotente.
+    private const string TunerGuid = "a1b2c3d4e5f678901a2b3c4d5e6f7891";
     private readonly object _tunerRegistrationSync = new();
     private bool _tunerRegistered;
     private DateTimeOffset _nextTunerAttemptUtc = DateTimeOffset.MinValue;
@@ -144,7 +145,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             return;
         }
 
-        // Evita rafagas de intentos simultaneos cuando /m3u recibe muchas solicitudes.
+        // Evita ráfagas de intentos simultáneos cuando /m3u recibe muchas solicitudes.
         if (!System.Threading.Monitor.TryEnter(_tunerRegistrationSync))
         {
             return;
@@ -157,20 +158,13 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 return;
             }
 
+            // SaveTunerHost en Jellyfin hace upsert basado en Id: si ya existe un
+            // TunerHostInfo con el mismo Id lo actualiza; si no, lo inserta.
+            // Usar un Id constante garantiza que cada reinicio actualiza el registro
+            // existente en lugar de crear un duplicado. ITunerHostManager.TunerHosts
+            // devuelve ITunerHost (solo Name/Type), no TunerHostInfo, por lo que no
+            // es posible detectar de forma fiable la URL/FriendlyName del tuner existente.
             var tunerUrl = $"{jellyfinBaseUrl}/JellyTV/m3u";
-            // Check by name+type so that if the plugin was reinstalled we recognize
-            // the existing entry and don't register a second identical tuner.
-            var existing = _tunerHostManager.TunerHosts
-                .FirstOrDefault(t =>
-                    string.Equals(t.Name, "JellyTV (auto)", StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(t.Type, "m3u", StringComparison.OrdinalIgnoreCase));
-
-            if (existing is not null)
-            {
-                _tunerRegistered = true;
-                return;
-            }
-
             var tuner = new TunerHostInfo
             {
                 Id           = TunerGuid,
@@ -178,18 +172,21 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 Url          = tunerUrl,
                 FriendlyName = "JellyTV (auto)",
                 Source       = "JellyTV Plugin",
-                TunerCount   = 10
+                // For Jellyfin's M3U tuner host, TunerCount == 0 keeps the source
+                // eligible for direct play instead of treating it like a managed
+                // finite-tuner source that is funneled through the live TV pipeline.
+                TunerCount   = 0
             };
 
             _tunerHostManager.SaveTunerHost(tuner, true).GetAwaiter().GetResult();
             _tunerRegistered = true;
-            PluginLog.Info($"[TUNER] Auto-registered tuner → {tunerUrl}");
+            PluginLog.Info($"[TUNER] Tuner registrado/actualizado → {tunerUrl}");
         }
         catch (Exception ex)
         {
-            // Evita reintentos continuos cuando Jellyfin aun no esta listo.
+            // Evita reintentos continuos cuando Jellyfin aún no está listo.
             _nextTunerAttemptUtc = DateTimeOffset.UtcNow.AddMinutes(2);
-            PluginLog.Error("[TUNER] Failed to auto-register tuner", ex);
+            PluginLog.Error("[TUNER] Failed to register/update tuner", ex);
         }
         finally
         {
@@ -218,8 +215,10 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             var client = new HttpClient(new SocketsHttpHandler
             {
                 AllowAutoRedirect = allowRedirect,
+                MaxAutomaticRedirections = 15,
                 UseCookies = true,
                 CookieContainer = cookieContainer,
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
                 PooledConnectionLifetime = TimeSpan.FromMinutes(10),
                 SslOptions = { RemoteCertificateValidationCallback = (_, _, _, _) => true }
             }, disposeHandler: false);

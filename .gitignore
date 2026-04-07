@@ -52,3 +52,4 @@ artifacts/
 # Local secrets
 secrets.json
 .local.settings.json
+JellyTV-Worker/

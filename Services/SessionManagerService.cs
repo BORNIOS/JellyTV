@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -116,7 +117,7 @@ public class SessionManagerService : BackgroundService
             return;
         }
 
-        // Guard: if this upstream recently returned a non-auth error, skip the HTTP call entirely
+        // Guard: if this upstream recently failed, skip the HTTP call entirely
         // so PollOnceAsync doesn't hammer the provider on a 4-5s ErrorBackoff loop.
         var url = session.UpstreamUrl;
         if (_resolveFailures.TryGetValue(url, out var failedAt) &&
@@ -125,18 +126,69 @@ public class SessionManagerService : BackgroundService
             var remaining = (int)(ResolveFailureBackoff - (DateTimeOffset.UtcNow - failedAt)).TotalSeconds;
             _logger.LogWarning("[JellyTV] Session {Id} upstream in failure backoff ({Sec}s remaining), skipping renewal",
                 session.SessionId, remaining);
-            throw new HttpRequestException($"Upstream recently failed — renewal backoff {remaining}s remaining.",
-                null, System.Net.HttpStatusCode.BadGateway);
+            return;
         }
 
         session.IsRenewing = true;
         try
         {
             _logger.LogInformation("[JellyTV] Renewing token for session {Id}", session.SessionId);
-            session.LastResolved = await _resolver.ResolveAsync(session.UpstreamUrl, ct).ConfigureAwait(false);
-            _resolveFailures.TryRemove(session.UpstreamUrl, out _); // clear any previous failure on success
-            _logger.LogInformation("[JellyTV] Token renewed for session {Id}. New URL: {Url}",
-                session.SessionId, session.LastResolved.FinalUrl);
+
+            HttpRequestException? lastAuthException = null;
+            Exception? lastException = null;
+
+            foreach (var candidate in BuildRenewalCandidates(session))
+            {
+                try
+                {
+                    var resolved = await _resolver.ResolveAsync(candidate, ct).ConfigureAwait(false);
+                    session.LastResolved = resolved;
+
+                    // If we discovered a better non-token seed URL, keep it for future renewals.
+                    if (!IsLikelyTokenizedUrl(candidate))
+                    {
+                        session.UpstreamUrl = candidate;
+                    }
+
+                    _resolveFailures.TryRemove(session.UpstreamUrl, out _);
+                    _logger.LogInformation("[JellyTV] Token renewed for session {Id}. Seed={Seed} Final={Url}",
+                        session.SessionId, candidate, resolved.FinalUrl);
+                    return;
+                }
+                catch (HttpRequestException ex) when ((int?)ex.StatusCode is 401 or 403)
+                {
+                    lastAuthException = ex;
+                    _logger.LogWarning("[JellyTV] Renewal auth-failed for session {Id} using seed {Seed} (status={Status})",
+                        session.SessionId, candidate, (int?)ex.StatusCode);
+                }
+                catch (Exception ex)
+                {
+                    lastException = ex;
+                    _logger.LogWarning(ex, "[JellyTV] Renewal attempt failed for session {Id} using seed {Seed}",
+                        session.SessionId, candidate);
+                }
+            }
+
+            // If every attempt failed with auth errors, apply backoff and do not throw.
+            // Throwing here creates tight exception loops in BroadcastPump and floods logs.
+            if (lastAuthException is not null && lastException is null)
+            {
+                _resolveFailures[session.UpstreamUrl] = DateTimeOffset.UtcNow;
+                _logger.LogWarning("[JellyTV] Renewal exhausted auth candidates for session {Id}; entering backoff {Sec}s",
+                    session.SessionId, (int)ResolveFailureBackoff.TotalSeconds);
+                return;
+            }
+
+            if (lastException is not null)
+            {
+                throw lastException;
+            }
+
+            // Defensive fallback (no candidate succeeded but no explicit exception captured).
+            _resolveFailures[session.UpstreamUrl] = DateTimeOffset.UtcNow;
+            _logger.LogWarning("[JellyTV] Renewal produced no result for session {Id}; entering backoff {Sec}s",
+                session.SessionId, (int)ResolveFailureBackoff.TotalSeconds);
+            return;
         }
         catch (HttpRequestException ex) when ((int?)ex.StatusCode is not (401 or 403))
         {
@@ -158,6 +210,96 @@ public class SessionManagerService : BackgroundService
     }
 
     /// <summary>
+    /// Returns remaining backoff time for a session upstream if currently throttled.
+    /// </summary>
+    public bool TryGetRenewalBackoffRemaining(StreamSession session, out TimeSpan remaining)
+    {
+        remaining = TimeSpan.Zero;
+
+        if (!_resolveFailures.TryGetValue(session.UpstreamUrl, out var failedAt))
+        {
+            return false;
+        }
+
+        var elapsed = DateTimeOffset.UtcNow - failedAt;
+        if (elapsed >= ResolveFailureBackoff)
+        {
+            return false;
+        }
+
+        remaining = ResolveFailureBackoff - elapsed;
+        return true;
+    }
+
+    private static bool IsLikelyTokenizedUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return false;
+        }
+
+        return url.Contains("token=", StringComparison.OrdinalIgnoreCase)
+               || url.Contains("access_token=", StringComparison.OrdinalIgnoreCase)
+               || url.Contains("/hlsr/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IEnumerable<string> BuildRenewalCandidates(StreamSession session)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        void Track(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            seen.Add(value);
+            var q = value.IndexOf('?', StringComparison.Ordinal);
+            if (q > 0) seen.Add(value[..q]);
+        }
+
+        Track(session.UpstreamUrl);
+        Track(session.LastResolved?.OriginalUrl);
+        Track(session.LastResolved?.FinalUrl);
+
+        if (session.LastResolved?.RedirectChain is { Count: > 0 } chain)
+        {
+            foreach (var hop in chain)
+                Track(hop);
+        }
+
+        // PlaylistPollUrl is the penultimate-hop URL (e.g. alfa.7057460.xyz) that
+        // generates a fresh token via 302 redirect on each hit — no stale token queried.
+        // Bubble it to the front of non-tokenized candidates and, when it is non-tokenized,
+        // skip tokenized candidates entirely (the redirect will mint fresh ones).
+        var pollUrl = session.LastResolved?.PlaylistPollUrl;
+        bool pollUrlIsNonToken = !string.IsNullOrWhiteSpace(pollUrl) && !IsLikelyTokenizedUrl(pollUrl);
+
+        var nonTokenized = new List<string>();
+        var tokenized    = new List<string>();
+
+        foreach (var candidate in seen)
+        {
+            if (IsLikelyTokenizedUrl(candidate))
+                tokenized.Add(candidate);
+            else
+                nonTokenized.Add(candidate);
+        }
+
+        // Ensure PlaylistPollUrl is tried first among non-tokenized candidates.
+        if (pollUrlIsNonToken && nonTokenized.Remove(pollUrl!))
+            nonTokenized.Insert(0, pollUrl!);
+
+        foreach (var candidate in nonTokenized)
+            yield return candidate;
+
+        // When a non-tokenized PlaylistPollUrl is available, omit stale tokenized
+        // candidates — hitting them would only produce 403s with expired tokens.
+        if (!pollUrlIsNonToken)
+        {
+            foreach (var candidate in tokenized)
+                yield return candidate;
+        }
+    }
+
+    /// <summary>
     /// Checks whether the session's token needs renewal based on configured margin.
     /// </summary>
     public bool NeedsRenewal(StreamSession session)
@@ -166,6 +308,12 @@ public class SessionManagerService : BackgroundService
         if (resolved is null) return true;
 
         var marginSeconds = Plugin.Instance?.Configuration.TokenRefreshMarginSeconds ?? 30;
+        // For short-lived rotating HLS tokens, a large margin causes aggressive early renewals.
+        // Cap the proactive margin unless the user explicitly lowers it in config.
+        if (!string.IsNullOrWhiteSpace(resolved.TokenValue) && marginSeconds > 12)
+        {
+            marginSeconds = 12;
+        }
 
         // If we have an explicit expiry, use it
         if (resolved.TokenExpiry.HasValue)
@@ -173,8 +321,10 @@ public class SessionManagerService : BackgroundService
             return DateTimeOffset.UtcNow >= resolved.TokenExpiry.Value - TimeSpan.FromSeconds(marginSeconds);
         }
 
-        // Fallback: refresh every 5 minutes if no expiry information
-        return DateTimeOffset.UtcNow >= resolved.ResolvedAt + TimeSpan.FromMinutes(5);
+        // No expiry metadata:
+        // - Streams without token should not be renewed proactively.
+        // - Tokenized streams will renew reactively on 401/403 and/or via broadcast-estimated expiry.
+        return false;
     }
 
     /// <inheritdoc />

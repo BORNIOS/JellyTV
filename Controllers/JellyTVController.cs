@@ -105,23 +105,21 @@ public class JellyTVController : ControllerBase
 
             if (resolved.IsHls)
             {
-                // ── Broadcast mode ────────────────────────────────────────────
-                // We download segments ourselves and stream raw MPEG-TS directly.
-                // This bypasses ffmpeg's built-in HLS client, which fails with
-                // AVERROR_HTTP_FORBIDDEN (-1094995529) when providers rotate tokens.
-                var pump = Broadcast.GetOrCreate(session);
-                pump.EnsureRunning();
+                    // ── Broadcast mode ────────────────────────────────────────────
+                    // We download segments ourselves and stream raw MPEG-TS directly.
+                    // This keeps one shared upstream pump per channel so multiple
+                    // Jellyfin clients/probes can watch the same channel concurrently.
+                    var pump = Broadcast.GetOrCreate(session);
+                    pump.EnsureRunning();
 
-                // Pre-warm: wait up to 8 s for the pump to have at least one segment
-                // in the ring buffer. This ensures ffmpeg gets data immediately after
-                // following the redirect, cutting the blank-screen startup delay from
-                // ~15 s down to ~3-5 s (the time it takes ffmpeg to start encoding).
-                await pump.WaitForFirstSegmentAsync(TimeSpan.FromSeconds(8), cancellationToken)
-                    .ConfigureAwait(false);
+                    // Pre-warm up to 8 s so the ring buffer has at least one segment
+                    // before ffmpeg follows the redirect to /broadcast.
+                    await pump.WaitForFirstSegmentAsync(TimeSpan.FromSeconds(8), cancellationToken)
+                        .ConfigureAwait(false);
 
-                var broadcastUrl = $"{GetProxyBaseUrl()}/broadcast?sid={Uri.EscapeDataString(session.SessionId)}";
-                PluginLog.Info($"[STREAM] Redirecting to broadcast sid={session.SessionId}");
-                return Redirect(broadcastUrl);
+                    var broadcastUrl = $"{GetProxyBaseUrl()}/broadcast?sid={Uri.EscapeDataString(session.SessionId)}";
+                    PluginLog.Info($"[STREAM] Redirecting to broadcast sid={session.SessionId}");
+                    return Redirect(broadcastUrl);
             }
 
             return Redirect(resolved.FinalUrl);

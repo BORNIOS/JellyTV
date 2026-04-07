@@ -55,6 +55,15 @@ public class ResolvedStream
     public List<string> RedirectChain { get; set; } = new();
 
     /// <summary>
+    /// The URL the BroadcastPump should use for each playlist poll.
+    /// For tokenized streams this is the penultimate URL in the redirect chain
+    /// (e.g. alfa.7057460.xyz) so that each poll follows a fresh token-generating
+    /// redirect rather than re-using a single-use query-string token.
+    /// For non-tokenized streams this equals <see cref="FinalUrl"/>.
+    /// </summary>
+    public string PlaylistPollUrl { get; set; } = string.Empty;
+
+    /// <summary>
     /// Body text fetched during the resolver's final GET.
     /// Available exactly once: the BroadcastPump consumes it to avoid a second
     /// rate-limited request to a single-use provider token.

@@ -1,149 +1,256 @@
 # JellyTV
 
-Plugin para Jellyfin que actúa como proxy inteligente para servicios IPTV con tokens de autenticación de corta duración y múltiples redirecciones HTTP.
+Plugin para Jellyfin orientado a IPTV con URLs efímeras, cadenas de redirección y tokens de corta vida. El plugin centraliza varias fuentes M3U, expone una lista combinada para Live TV y mantiene la reproducción estable cuando el proveedor rota la URL final del stream.
 
-## ¿Qué problema resuelve?
+## Objetivo
 
-Los servicios IPTV de pago frecuentemente entregan URLs que:
-1. Redirigen varias veces (HTTP 301/302) antes de llegar al stream real.
-2. Incluyen un token de autenticación en la URL final que expira en minutos.
+JellyTV resuelve tres problemas habituales en proveedores IPTV:
 
-Los reproductores estándar (incluyendo el cliente Jellyfin base) no saben renovar ese token, lo que provoca cortes cada vez que caduca. Este plugin actúa como intermediario transparente: resuelve las redirecciones, reescribe el playlist HLS para que todo pase por el proxy, y renueva los tokens automáticamente en segundo plano.
+1. Las URLs de canal no son estables y pasan por varios redirects antes del stream real.
+2. El token final puede caducar en segundos o minutos.
+3. El cliente HLS nativo suele fallar cuando el proveedor invalida un token en mitad de la reproducción.
 
-## Arquitectura
+La estrategia actual del plugin es:
 
+- combinar una o más fuentes M3U configuradas en el plugin;
+- reescribir cada canal para que entre por `/JellyTV/stream`;
+- resolver redirects y detectar tokens en el primer acceso;
+- para HLS, derivar la reproducción a un modo broadcast que descarga segmentos upstream una sola vez por canal y los reparte a múltiples clientes Jellyfin.
+
+## Flujo real de reproducción
+
+```text
+Fuentes M3U configuradas
+        |
+        v
+GET /JellyTV/m3u
+        |
+        +--> M3uAggregatorService
+              - descarga todas las fuentes habilitadas
+              - conserva metadatos EXTINF
+              - reescribe cada URL de canal -> /JellyTV/stream?url=<base64>
+        |
+        v
+Jellyfin Live TV consume la M3U combinada
+        |
+        v
+GET /JellyTV/stream?url=<base64>
+        |
+        +--> SessionManagerService
+        |     - crea o reutiliza sesion por URL upstream
+        |     - coordina renovaciones y backoff
+        |
+        +--> RedirectResolverService
+              - intenta auto-redirect con cookies compartidas
+              - si falla, recorre la cadena manualmente
+              - detecta expiracion y token cuando es posible
+        |
+        +--> Si el stream no es HLS
+        |     - redireccion HTTP al URL final
+        |
+        +--> Si el stream es HLS
+              - crea/reutiliza un BroadcastPump por canal
+              - precalienta el buffer con el primer segmento
+              - redirige a /JellyTV/broadcast?sid=<sessionId>
+        |
+        v
+GET /JellyTV/broadcast?sid=<sessionId>
+        |
+        +--> BroadcastService / BroadcastPump
+              - hace polling del playlist HLS
+              - descarga segmentos .ts upstream
+              - renueva token si recibe 401/403
+              - distribuye un flujo MPEG-TS continuo a todos los suscriptores
 ```
-Cliente Jellyfin
-    │
-    ▼
-GET /JellyTV/stream?url=<url-original>
-    │
-    ▼
-RedirectResolverService  ──►  IPTV Provider
-(sigue redirects, detecta token expiry)
-    │
-    ▼
-HlsRewriterService
-(reescribe m3u8: cada segmento → /JellyTV/segment?sid=...&url=...)
-    │
-    ▼
-Playlist reescrito → Cliente
-    │
-    ▼  (cliente pide segmentos)
-GET /JellyTV/segment?sid=...&url=<segmento-encoded>
-    │
-    ├── Si token caducó (403/401): RenovarSesión → retry
-    └── Stream del segmento .ts → Cliente
-    
-SessionManagerService (BackgroundService)
-    └── Cada 10s: revisa sesiones activas, renueva tokens proactivamente
-```
 
-## Instalación
+## Componentes
 
-### Opción A — Compilar desde fuente
+### Plugin
 
-```bash
-cd JellyTV
-dotnet build -c Release
-```
+`Plugin.cs` inicializa los servicios principales, configura el logger propio y puede registrar automáticamente un tuner tipo M3U en Jellyfin apuntando a `/JellyTV/m3u`.
 
-Copiar `bin/Release/net9.0/JellyTV.dll` a:
-- **Linux/Docker**: `/config/plugins/JellyTV/`
-- **Windows**: `%APPDATA%\Jellyfin\plugins\JellyTV\`
+### M3uAggregatorService
 
-Reiniciar Jellyfin.
+- Descarga todas las fuentes habilitadas de `PluginConfiguration.Sources`.
+- Mantiene una caché corta de la M3U combinada de 20 segundos.
+- Actualiza métricas por fuente: última sincronización, cantidad de canales y último error.
+- Reescribe cada URL de canal a Base64 URL-safe para que Jellyfin nunca vea directamente la URL IPTV original.
 
-### Opción B — Repositorio de plugins (cuando esté publicado)
+### RedirectResolverService
 
-Agregar el repositorio en Jellyfin → Dashboard → Plugins → Repositories y buscar "JellyTV".
+- Usa dos clientes HTTP: uno con redirects automáticos y otro con seguimiento manual.
+- Comparte cookies entre peticiones del plugin para mantener compatibilidad con proveedores que requieren estado.
+- Guarda la cadena de redirects completa para diagnóstico.
+- Cuando detecta una URL tokenizada, intenta usar la penúltima URL de la cadena como `PlaylistPollUrl`, de modo que cada polling regenere un token fresco en lugar de reutilizar uno agotado.
 
-## Uso
+### SessionManagerService
 
-### 1. Configurar el plugin
+- Gestiona las sesiones activas por URL upstream.
+- Aplica backoff de 30 segundos cuando el upstream falla con errores no autenticación para no saturar el proveedor.
+- Renueva el stream cuando detecta expiración o margen de seguridad insuficiente.
+- Para streams con token rotativo, prioriza candidatos de renovación no tokenizados antes de reintentar URLs viejas.
 
-Ir a **Dashboard → Plugins → JellyTV** y ajustar:
+### BroadcastService
 
-| Parámetro | Por defecto | Descripción |
+- Mantiene un `BroadcastPump` por canal.
+- Descarga los segmentos HLS una sola vez y los reparte a todos los suscriptores conectados.
+- Mantiene un pequeño ring buffer para que nuevos clientes empiecen a reproducir sin esperar demasiado.
+- Evita bucles agresivos de reintento cuando el proveedor devuelve 401/403 o errores temporales.
+
+### JellyTVController
+
+Expone endpoints HTTP para la lista M3U combinada, apertura de canales, broadcast, diagnóstico y lectura del log del plugin.
+
+## Endpoints
+
+Todos los endpoints del controlador actual están marcados con `AllowAnonymous`. Esto simplifica la integración con Live TV y el acceso a diagnóstico desde Jellyfin, pero implica que la exposición del servidor debe controlarse a nivel de red, reverse proxy o seguridad perimetral.
+
+| Endpoint | Uso | Notas |
 |---|---|---|
-| Max Redirects | 10 | Máximo de saltos HTTP a seguir |
-| Token Refresh Margin | 30s | Segundos antes del vencimiento para renovar |
-| Request Timeout | 15s | Timeout de peticiones al proveedor |
-| User Agent | Mozilla/5.0... | Cabecera User-Agent enviada al IPTV |
-| Verbose Logging | false | Loguea cada reescritura de segmento |
+| `/JellyTV/ping` | Health check simple | Devuelve estado del plugin y cantidad de fuentes configuradas |
+| `/JellyTV/m3u` | Lista M3U combinada | Puede forzar rebuild con `refresh=1` |
+| `/JellyTV/stream?url=<base64>` | Entrada por canal | Crea o reutiliza sesión; para HLS redirige a broadcast |
+| `/JellyTV/broadcast?sid=<sessionId>` | Flujo MPEG-TS continuo | Endpoint principal para HLS en modo compartido |
+| `/JellyTV/segment?sid=<sessionId>&url=<base64>` | Proxy interno de segmentos o subplaylists | Se usa cuando el plugin debe volver a reescribir un `.m3u8` o servir segmentos concretos |
+| `/JellyTV/sessions` | Diagnóstico de sesiones activas | Texto plano |
+| `/JellyTV/log?lines=500` | Tail del log propio del plugin | Texto plano; útil para soporte |
 
-### 2. Integrar con tu lista M3U
+## Configuración disponible
 
-Transforma las URLs de tu lista IPTV para que pasen por el proxy:
+La página de configuración embebida permite gestionar fuentes y parámetros globales.
 
-**URL original en M3U:**
-```
-http://tu-proveedor.com/live/usuario/pass/canal123
-```
+| Opción | Valor por defecto | Descripción técnica |
+|---|---|---|
+| `Sources` | lista vacía | Conjunto de playlists M3U/IPTV gestionadas por el plugin |
+| `AutoRegisterTuner` | `true` | Registra o actualiza automáticamente un tuner M3U de Jellyfin apuntando a `/JellyTV/m3u` |
+| `TokenRefreshMarginSeconds` | `30` | Margen máximo para renovar antes del vencimiento; para streams con token corto el servicio reduce internamente el margen efectivo |
+| `RequestTimeoutSeconds` | `15` | Timeout de descarga de fuentes M3U y otras operaciones HTTP según el servicio |
+| `MaxRedirects` | `10` | Límite de redirects al resolver la URL final |
+| `UserAgent` | `Mozilla/5.0 (compatible; JellyTV/1.0)` | User-Agent enviado al proveedor IPTV |
+| `VerboseLogging` | `false` | Activa logs adicionales en reescritura y diagnóstico |
 
-**URL para Jellyfin (Live TV → Tuner):**
-```
-http://localhost:8096/JellyTV/stream?url=http%3A%2F%2Ftu-proveedor.com%2Flive%2Fusuario%2Fpass%2Fcanal123
-```
+Cada fuente M3U conserva además:
 
-Puedes automatizar esto con un script que genere la lista M3U ya transformada.
+- `Name`
+- `Url`
+- `IsEnabled`
+- `LastFetched`
+- `LastChannelCount`
+- `LastError`
 
-### 3. Agregar como Tuner en Jellyfin
+## Uso recomendado
 
-1. Ir a **Dashboard → Live TV → Add Tuner Device**.
-2. Seleccionar **M3U Tuner**.
-3. Pegar la URL de tu lista M3U (con las URLs ya transformadas al proxy).
-4. Jellyfin pedirá los canales a través del proxy automáticamente.
+### 1. Compilar
 
-## Detección de expiración de token
+Compilación verificada en este repositorio:
 
-El plugin detecta automáticamente los siguientes parámetros de query como indicadores de expiración:
-
-- `expires`, `exp`, `expiry`, `end`, `validuntil`, `token_expiry`
-
-Ejemplo de URL con token reconocido:
-```
-https://cdn.proveedor.com/stream/canal?token=abc123&expires=1712000000
-```
-
-Si tu proveedor usa un nombre de parámetro diferente, puedes extender `TryParseTokenExpiry` en `RedirectResolverService.cs`.
-
-## Diagrama de renovación de token
-
-```
-t=0      ──► Sesión creada, token válido hasta t=300
-t=270    ──► SessionManager detecta que faltan 30s (margen configurado)
-             └── RenewSessionAsync() → nueva URL con token fresco
-t=280    ──► Cliente pide segmento → proxy sirve con token nuevo
-t=300    ──► Token antiguo caducó — pero ya fue renovado en t=270 ✓
+```powershell
+dotnet build .\JellyTV.csproj -c Release
 ```
 
-## Consideraciones de seguridad
+Salida esperada:
 
-- El endpoint `/JellyTV/stream` requiere autenticación Jellyfin (`DefaultAuthorization`).
-- Las URLs de segmentos incluyen el `sessionId` para verificar que la sesión existe.
-- Las URLs upstream se codifican en Base64 URL-safe; el servidor no expone las credenciales IPTV directamente en logs por defecto.
-
-## Requisitos
-
-- Jellyfin 10.9.x o superior
-- .NET 8.0 Runtime (incluido en las instalaciones estándar de Jellyfin)
-
-## Estructura del proyecto
-
+```text
+bin\Release\net9.0\JellyTV.dll
 ```
+
+### 2. Instalar el plugin
+
+Copiar el ensamblado compilado y sus dependencias al directorio de plugins de Jellyfin. En una instalación típica:
+
+- Windows: `%APPDATA%\Jellyfin\Server\plugins\JellyTV\`
+- Linux / contenedor: el directorio de plugins configurado por Jellyfin dentro del volumen persistente
+
+Después, reiniciar Jellyfin.
+
+### 3. Configurar fuentes
+
+En `Dashboard -> Plugins -> JellyTV`:
+
+1. Agregar una o más fuentes M3U.
+2. Ajustar timeouts, redirects y User-Agent si el proveedor lo requiere.
+3. Opcionalmente dejar activado `AutoRegisterTuner`.
+
+### 4. Registrar el tuner M3U en Jellyfin
+
+Hay dos modos:
+
+- automático: con `AutoRegisterTuner=true`, el plugin intenta registrar el tuner al atender `/JellyTV/m3u`;
+- manual: usar la URL mostrada en la página del plugin dentro de `Dashboard -> Live TV -> Add Tuner Device -> M3U Tuner`.
+
+La URL expuesta por el plugin es:
+
+```text
+http://<host-jellyfin>/JellyTV/m3u
+```
+
+## Detección de expiración y tokens
+
+El resolvedor intenta detectar expiración usando nombres de query frecuentes:
+
+- `expires`
+- `exp`
+- `expiry`
+- `end`
+- `validuntil`
+- `token_expiry`
+
+También intenta extraer tokens desde parámetros frecuentes como:
+
+- `token`
+- `access_token`
+- `auth`
+- `t`
+- `key`
+- `sig`
+- `tokenid`
+
+Si un proveedor usa otra convención, el punto de extensión actual está en la lógica de `RedirectResolverService`.
+
+## Logging y diagnóstico
+
+- El plugin escribe un log propio diario con formato `JellyTV-yyyy-MM-dd.log`.
+- El log rota por fecha y elimina archivos con más de 5 días.
+- El directorio del log se resuelve intentando primero el directorio de logs de Jellyfin y luego rutas alternativas del sistema.
+- La UI del plugin permite abrir las últimas líneas del log y consultar el estado vía `/JellyTV/ping`.
+
+## Requisitos del proyecto
+
+Estado actual del repositorio:
+
+- `TargetFramework`: `net9.0`
+- Paquetes Jellyfin: `Jellyfin.Controller 10.11.0`, `Jellyfin.Model 10.11.0`
+- Referencia de framework: `Microsoft.AspNetCore.App`
+- Versión del plugin: `2.0.1`
+
+## Estructura real del repositorio
+
+```text
 JellyTV/
-├── Plugin.cs                          # Entrada principal del plugin
-├── PluginServiceRegistrator.cs        # Registro de servicios DI
+├── Plugin.cs
+├── Pluginlog.cs
+├── JellyTV.csproj
 ├── Configuration/
-│   ├── PluginConfiguration.cs         # Modelo de configuración
-│   └── configPage.html                # UI de configuración en Jellyfin
+│   ├── ConfigPage.html
+│   └── PluginConfiguration.cs
 ├── Controllers/
-│   └── JellyTV.cs         # Endpoints HTTP /stream y /segment
+│   └── JellyTVController.cs
 ├── Models/
-│   └── StreamSession.cs               # Modelos de sesión y stream resuelto
-└── Services/
-    ├── RedirectResolverService.cs     # Sigue redirecciones HTTP
-    ├── HlsRewriterService.cs          # Reescribe playlists HLS
-    └── SessionManagerService.cs       # Gestiona sesiones y renueva tokens
+│   ├── IptvSources.cs
+│   └── StreamSession.cs
+├── Services/
+│   ├── BroadcastService.cs
+│   ├── HlsRewriterService.cs
+│   ├── M3UAggregatorService.cs
+│   ├── RedirectResolverService.cs
+│   └── SessionManagerService.cs
+└── recorder.ps1
 ```
+
+## Limitaciones y notas operativas
+
+- La estabilidad final sigue dependiendo del comportamiento del proveedor IPTV.
+- Si el proveedor invalida tokens de forma extremadamente agresiva o por IP/concurrencia, el plugin solo puede mitigar una parte del problema.
+- El modo broadcast está pensado para HLS; streams no HLS se resuelven y redirigen directamente.
+- La M3U combinada tiene una caché corta intencional para reducir presión sobre el upstream cuando Jellyfin o varios clientes reconsultan la lista.
+- Los endpoints de diagnóstico y logs son anónimos en la implementación actual; si el servidor se publica a Internet, conviene filtrar acceso a nivel de reverse proxy o red.
