@@ -15,16 +15,19 @@ public class RedirectResolverService
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<RedirectResolverService> _logger;
+    private readonly ProxyPoolService _proxyPool;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RedirectResolverService"/> class.
     /// </summary>
     public RedirectResolverService(
         IHttpClientFactory httpClientFactory,
-        ILogger<RedirectResolverService> logger)
+        ILogger<RedirectResolverService> logger,
+        ProxyPoolService proxyPool)
     {
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _proxyPool = proxyPool;
     }
 
     /// <summary>
@@ -38,23 +41,32 @@ public class RedirectResolverService
         var config = Plugin.Instance?.Configuration;
         var maxRedirects = config?.MaxRedirects ?? 10;
 
+        // Select one proxy for this entire resolve call (both auto and manual paths share it).
+        // proxyKey is non-null only when a healthy proxy was selected.
+        var (proxyKey, proxyNoRedirect, proxyAutoRedirect) = _proxyPool.GetNextProxy();
+
         // Strategy similar to robust player clients:
         // 1) Try automatic redirect handling first (browser-like behavior + shared cookies).
         // 2) Fallback to manual redirect walk for full diagnostics/control.
-        var autoResolved = await TryResolveWithAutoRedirectAsync(originalUrl, cancellationToken).ConfigureAwait(false);
+        var autoResolved = await TryResolveWithAutoRedirectAsync(originalUrl, proxyAutoRedirect, cancellationToken).ConfigureAwait(false);
         if (autoResolved is not null)
         {
             return autoResolved;
         }
 
-        // Use a client that does NOT auto-follow redirects so we can track them
-        var client = _httpClientFactory.CreateClient("IptvNoRedirect");
+        // Use a client that does NOT auto-follow redirects so we can track them.
+        // directClient is always the factory fallback; proxyClient may be null.
+        var directClient = _httpClientFactory.CreateClient("IptvNoRedirect");
+        var client = proxyNoRedirect ?? directClient;
+        // Set to true after the first proxy failure so remaining hops skip the proxy timeout.
+        bool proxyMarkedFailed = proxyKey is null;
 
         var currentUrl = originalUrl;
         var redirectCount = 0;
         var redirectChain = new List<string> { originalUrl };
         string contentType = string.Empty;
         string? initialPlaylistContent = null;
+        string? rotationNodeUrl = null;
 
         _logger.LogInformation("[JellyTV] Starting resolution for: {Url}", originalUrl);
 
@@ -62,15 +74,23 @@ public class RedirectResolverService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, currentUrl);
             HttpResponseMessage response;
 
             try
             {
                 PluginLog.Info($"[RESOLVE] GET {currentUrl} (attempt {redirectCount + 1})");
-                response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-                    .ConfigureAwait(false);
+                var (resp, usedFallback) = await SendWithFallbackAsync(client, directClient, currentUrl, cancellationToken).ConfigureAwait(false);
+                response = resp;
                 PluginLog.Info($"[RESOLVE] Response {currentUrl} -> {(int)response.StatusCode}");
+
+                // On the first proxy failure: mark the proxy unhealthy and switch all
+                // remaining hops to the direct client (avoids one 3-second timeout per hop).
+                if (usedFallback && !proxyMarkedFailed && proxyKey is not null)
+                {
+                    proxyMarkedFailed = true;
+                    _proxyPool.MarkFailed(proxyKey);
+                    client = directClient;
+                }
             }
             catch (Exception ex)
             {
@@ -98,6 +118,9 @@ public class RedirectResolverService
 
                 _logger.LogDebug("[JellyTV] Redirect {Count}: {From} -> {To}", redirectCount + 1, currentUrl, nextUrl);
                 PluginLog.Info($"[RESOLVE] Redirect {redirectCount + 1}: {currentUrl} -> {nextUrl}");
+                // Track the rotation node: the hop that outputs a tokenized redirect destination.
+                if (IsRotationSignal(nextUrl))
+                    rotationNodeUrl = currentUrl;
                 // Record redirect hop
                 redirectChain.Add(nextUrl);
                 currentUrl = nextUrl;
@@ -142,14 +165,16 @@ public class RedirectResolverService
         var tokenExpiry = TryParseTokenExpiry(currentUrl);
         var tokenValue = TryExtractTokenFromUrl(currentUrl);
 
-        // For tokenized streams, use the penultimate redirect URL as the playlist poll URL.
-        // This means each playlist poll follows a fresh token-generating redirect (e.g. alfa →
-        // tuenisix?newToken) rather than re-using the short-lived query-string token directly.
-        // The short-lived ?token= in the final URL is effectively single-use; re-polying it
-        // directly causes 401/403 within seconds and triggers unnecessary renewal loops.
-        string playlistPollUrl = currentUrl;
-        if (!string.IsNullOrEmpty(tokenValue) && redirectChain.Count >= 2)
-            playlistPollUrl = redirectChain[redirectChain.Count - 2];
+        // For tokenized streams, use the rotation node (e.g. alfa.7057460.xyz) as poll URL.
+        // GET rotationNode → HTTP→HTTP redirect → tuenisix?freshToken on every poll cycle.
+        // This avoids: (a) HTTPS→HTTP block from Chain[0] (jellytv HTTPS origin),
+        //              (b) re-using a stale ?token= URL that expired between polls.
+        // Falls back to originalUrl if no rotation node was detected (non-standard chain).
+        string playlistPollUrl;
+        if (!string.IsNullOrEmpty(tokenValue))
+            playlistPollUrl = rotationNodeUrl ?? originalUrl;
+        else
+            playlistPollUrl = currentUrl;
 
         var resolved = new ResolvedStream
         {
@@ -167,6 +192,7 @@ public class RedirectResolverService
 
         // Attach the redirect chain for diagnostics/history
         resolved.RedirectChain = redirectChain;
+        resolved.RotationNodeUrl = rotationNodeUrl;
 
         _logger.LogInformation(
             "[JellyTV] Resolved to: {FinalUrl} | HLS={IsHls} | TokenExpiry={Expiry} | TokenPresent={TokenPresent}",
@@ -188,11 +214,12 @@ public class RedirectResolverService
 
     private async Task<ResolvedStream?> TryResolveWithAutoRedirectAsync(
         string originalUrl,
+        HttpClient? proxyClient,
         CancellationToken cancellationToken)
     {
         try
         {
-            var client = _httpClientFactory.CreateClient("JellyTV");
+            var client = proxyClient ?? _httpClientFactory.CreateClient("JellyTV");
             using var request = new HttpRequestMessage(HttpMethod.Get, originalUrl);
             using var response = await client
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
@@ -200,7 +227,14 @@ public class RedirectResolverService
 
             if (!response.IsSuccessStatusCode)
             {
-                PluginLog.Warn($"[RESOLVE-AUTO] Non-success HTTP {(int)response.StatusCode} at {originalUrl}; falling back to manual resolver");
+                // A 302 at the top of an HTTPS→HTTP chain is expected for providers like
+                // jellytv.hmovies.tv (the auto-redirect client cannot downgrade schemes).
+                // Log as INFO so it does not pollute the warning stream on normal operation.
+                var sc = (int)response.StatusCode;
+                if (sc is >= 300 and < 400)
+                    PluginLog.Info($"[RESOLVE-AUTO] Redirect {sc} at {originalUrl}; using manual resolver for cross-scheme chain");
+                else
+                    PluginLog.Warn($"[RESOLVE-AUTO] Non-success HTTP {sc} at {originalUrl}; falling back to manual resolver");
                 return null;
             }
 
@@ -230,7 +264,7 @@ public class RedirectResolverService
             {
                 OriginalUrl = originalUrl,
                 FinalUrl = finalUrl,
-                PlaylistPollUrl = finalUrl, // auto-resolve doesn't expose chain; fallback to FinalUrl
+                PlaylistPollUrl = !string.IsNullOrEmpty(TryExtractTokenFromUrl(finalUrl)) ? originalUrl : finalUrl,
                 BaseUrl = BuildBaseUrl(finalUrl),
                 ContentType = contentType,
                 IsHls = IsHlsUrl(finalUrl, contentType),
@@ -248,6 +282,30 @@ public class RedirectResolverService
         {
             PluginLog.Warn($"[RESOLVE-AUTO] Failed for {originalUrl}: {ex.Message}; falling back to manual resolver");
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Sends a GET using <paramref name="preferred"/>; on network failure switches to
+    /// <paramref name="fallback"/> and retries the same URL so a broken proxy never
+    /// permanently blocks the resolve chain.
+    /// Returns the response and a flag indicating whether the fallback was used.
+    /// </summary>
+    private static async Task<(HttpResponseMessage Response, bool UsedFallback)> SendWithFallbackAsync(
+        HttpClient preferred, HttpClient fallback, string url, CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        try
+        {
+            var resp = await preferred.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            return (resp, false);
+        }
+        catch (HttpRequestException ex) when (preferred != fallback)
+        {
+            PluginLog.Warn($"[RESOLVE] Proxy failed for {url}: {ex.Message} — retrying direct");
+            using var retryReq = new HttpRequestMessage(HttpMethod.Get, url);
+            var resp = await fallback.SendAsync(retryReq, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            return (resp, true);
         }
     }
 
@@ -296,6 +354,23 @@ public class RedirectResolverService
         return url.Contains(".m3u8", StringComparison.OrdinalIgnoreCase)
                || contentType.Contains("mpegurl", StringComparison.OrdinalIgnoreCase)
                || contentType.Contains("x-mpegurl", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when a redirect destination URL shows signs of a token-rotation
+    /// handoff — i.e. the upstream node is generating or embedding a short-lived token.
+    /// Used to identify the <c>RotationNodeUrl</c> (the hop that <em>outputs</em> the redirect).
+    /// </summary>
+    private static bool IsRotationSignal(string url)
+    {
+        if (url.Contains("?token=", StringComparison.OrdinalIgnoreCase)) return true;
+        if (url.Contains("/hlsr/", StringComparison.OrdinalIgnoreCase)) return true;
+        try
+        {
+            var q = new Uri(url).Query;
+            return q.Length > 80;
+        }
+        catch { return false; }
     }
 
     /// <summary>

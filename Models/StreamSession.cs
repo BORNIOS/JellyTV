@@ -69,6 +69,14 @@ public class ResolvedStream
     /// rate-limited request to a single-use provider token.
     /// </summary>
     public string? InitialPlaylistContent { get; set; }
+
+    /// <summary>
+    /// The redirect node responsible for rotating the token (e.g. <c>alfa.7057460.xyz</c>).
+    /// Detected as the last 3xx hop whose Location URL contains a token signal (<c>?token=</c>,
+    /// <c>/hlsr/</c>, or a query string longer than 80 characters).
+    /// Diagnostics only — renewal must always start from <see cref="OriginalUrl"/>.
+    /// </summary>
+    public string? RotationNodeUrl { get; set; }
 }
 
 /// <summary>

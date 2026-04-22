@@ -31,16 +31,6 @@ public class JellyTVController : ControllerBase
         _httpClientFactory = httpClientFactory;
     }
 
-    // ── PING ─────────────────────────────────────────────────────────────────
-    [HttpGet("ping")]
-    [AllowAnonymous]
-    public IActionResult Ping()
-    {
-        var sources = Plugin.Instance?.Configuration?.Sources?.Count ?? 0;
-        var msg = $"JellyTV ALIVE=true Sources={sources} Time={DateTimeOffset.Now:O}";
-        return Ok(msg);
-    }
-
     // ── M3U COMBINADO ────────────────────────────────────────────────────────
     // Jellyfin descarga esta URL como tuner M3U.
     // Combina todas las fuentes y reescribe las URLs de canales → /JellyTV/stream
@@ -105,21 +95,19 @@ public class JellyTVController : ControllerBase
 
             if (resolved.IsHls)
             {
-                    // ── Broadcast mode ────────────────────────────────────────────
-                    // We download segments ourselves and stream raw MPEG-TS directly.
-                    // This keeps one shared upstream pump per channel so multiple
-                    // Jellyfin clients/probes can watch the same channel concurrently.
-                    var pump = Broadcast.GetOrCreate(session);
-                    pump.EnsureRunning();
+                // Always use the broadcast pump for HLS — even no-token streams.
+                // The pump handles beacon URL extraction, live-edge clamping for DVR
+                // playlists, and fans out to multiple concurrent Jellyfin clients.
+                // Bypassing the pump would send raw amagi/beacon URLs to ffmpeg directly.
+                var pump = Broadcast.GetOrCreate(session);
+                pump.EnsureRunning();
 
-                    // Pre-warm up to 8 s so the ring buffer has at least one segment
-                    // before ffmpeg follows the redirect to /broadcast.
-                    await pump.WaitForFirstSegmentAsync(TimeSpan.FromSeconds(8), cancellationToken)
-                        .ConfigureAwait(false);
+                await pump.WaitForFirstSegmentAsync(TimeSpan.FromSeconds(8), cancellationToken)
+                    .ConfigureAwait(false);
 
-                    var broadcastUrl = $"{GetProxyBaseUrl()}/broadcast?sid={Uri.EscapeDataString(session.SessionId)}";
-                    PluginLog.Info($"[STREAM] Redirecting to broadcast sid={session.SessionId}");
-                    return Redirect(broadcastUrl);
+                var broadcastUrl = $"{GetProxyBaseUrl()}/broadcast?sid={Uri.EscapeDataString(session.SessionId)}";
+                PluginLog.Info($"[STREAM] Redirecting to broadcast sid={session.SessionId}");
+                return Redirect(broadcastUrl);
             }
 
             return Redirect(resolved.FinalUrl);
@@ -154,6 +142,16 @@ public class JellyTVController : ControllerBase
         }
 
         var pump = Broadcast.GetOrCreate(session);
+
+        // Refuse the connection when the pump already has the maximum number of
+        // subscribers. This stops Jellyfin's retry loop from accumulating hundreds of
+        // zombie HTTP connections (and their associated ffmpeg processes) when the pump
+        // stalls during token renewal.
+        if (pump.IsAtCapacity)
+        {
+            PluginLog.Warn($"[BROADCAST] Subscriber cap reached, returning 503 sid={sid}");
+            return StatusCode(503, "Stream is at capacity. Retry shortly.");
+        }
 
         // Headers must be set before writing to Response.Body.
         Response.ContentType                   = "video/MP2T";

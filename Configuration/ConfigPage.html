@@ -104,26 +104,6 @@
     background: rgba(0,164,220,.06);
   }
 
-  .jt-health {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin: 6px 0 12px 0;
-    font-size: .95em;
-  }
-
-  .jt-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    box-shadow: 0 0 0 2px rgba(255,255,255,.08);
-    flex: 0 0 12px;
-  }
-
-  .jt-dot.wait { background: #f5b400; }
-  .jt-dot.ok { background: #34a853; }
-  .jt-dot.fail { background: #ea4335; }
-
   .jt-tuner-box {
     margin-top: 8px;
   }
@@ -150,7 +130,7 @@
 <div id="JellyTVConfigPage"
      data-role="page"
   data-require="emby-input,emby-button"
-     data-pluginuniqueid="a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+     data-pluginuniqueid="f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c"
      class="page type-interior pluginConfigurationPage">
   <div data-role="content">
     <div class="content-primary jellytv-wrap">
@@ -202,6 +182,64 @@
             </div>
 
             <div id="globalStatus" class="jt-status-line jt-note"></div>
+          </div>
+        </fieldset>
+
+        <fieldset class="verticalSection-extrabottompadding jt-card">
+          <legend class="sectionTitle"><h3>Pool de proxies</h3></legend>
+          <div class="configSection">
+            <div class="fieldDescription">Proxies HTTPS para resoluciones de cadena. Los segmentos se descargan directamente sin proxy.</div>
+
+            <div class="jt-toolbar">
+              <button id="btnShowProxyEditor" is="emby-button" type="button" class="raised button-submit emby-button jt-primary">
+                <span>Agregar proxy</span>
+              </button>
+            </div>
+
+            <div id="proxyEditor" class="jt-panel" style="display:none;">
+              <h4 id="proxyEditorTitle" class="sectionTitle" style="margin-top:0;">Agregar proxy</h4>
+              <div class="inputContainer">
+                <label class="inputLabel inputLabelUnfocused" for="proxyHost">Host / IP</label>
+                <input id="proxyHost" is="emby-input" type="text" class="emby-input" placeholder="192.168.1.1" autocomplete="off"/>
+              </div>
+              <div class="inputContainer">
+                <label class="inputLabel inputLabelUnfocused" for="proxyPort">Puerto</label>
+                <input id="proxyPort" is="emby-input" type="number" min="1" max="65535" class="emby-input" placeholder="8080"/>
+              </div>
+              <div class="inputContainer">
+                <label class="inputLabel inputLabelUnfocused" for="proxyUsername">Usuario (opcional)</label>
+                <input id="proxyUsername" is="emby-input" type="text" class="emby-input" autocomplete="off"/>
+              </div>
+              <div class="inputContainer">
+                <label class="inputLabel inputLabelUnfocused" for="proxyPassword">Contrasena (opcional)</label>
+                <input id="proxyPassword" is="emby-input" type="password" class="emby-input" autocomplete="off"/>
+              </div>
+              <div class="checkboxContainer">
+                <input id="proxyUseHttps" type="checkbox"/>
+                <label class="checkboxLabel emby-checkbox-label" for="proxyUseHttps">Proxy HTTPS (el proxy mismo habla TLS)</label>
+              </div>
+              <div class="jt-toolbar">
+                <button id="btnSaveProxy" is="emby-button" type="button" class="raised button-submit emby-button jt-primary"><span>Guardar proxy</span></button>
+                <button id="btnCancelProxy" is="emby-button" type="button" class="emby-button jt-danger"><span>Cancelar</span></button>
+              </div>
+            </div>
+
+            <div class="jt-tableWrap">
+              <table class="jt-table" aria-label="Tabla de proxies configurados">
+                <thead>
+                  <tr>
+                    <th>Host</th>
+                    <th>Puerto</th>
+                    <th>Esquema</th>
+                    <th>Estado</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="proxiesTableBody"></tbody>
+              </table>
+            </div>
+
+            <div id="proxyStatus" class="jt-status-line jt-note"></div>
           </div>
         </fieldset>
 
@@ -265,11 +303,6 @@
         <fieldset class="verticalSection-extrabottompadding jt-card">
           <legend class="sectionTitle"><h3>Estado del plugin</h3></legend>
           <div class="configSection">
-            <div class="jt-health">
-              <span id="healthDot" class="jt-dot wait"></span>
-              <span id="pingStatusText">Verificando estado...</span>
-            </div>
-
             <div class="jt-toolbar">
               <button id="btnOpenLogs" is="emby-button" type="button" class="emby-button jt-danger"><span>Abrir logs</span></button>
             </div>
@@ -284,7 +317,7 @@
     (function () {
       'use strict';
 
-      var pluginId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+      var pluginId = 'f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c';
       var state = {
         page: null,
         cfg: null,
@@ -292,8 +325,8 @@
         bootstrapped: false,
         lastBootstrapAt: 0,
         editorIndex: -1,
-        retryTimer: null,
-        pingTimer: null
+        proxyEditorIndex: -1,
+        retryTimer: null
       };
 
       function tryGet(fn) {
@@ -361,7 +394,7 @@
       }
 
       function setBusy(isBusy) {
-        var ids = ['btnSaveAll', 'btnSaveSource', 'btnShowSourceEditor', 'btnSyncSources'];
+        var ids = ['btnSaveAll', 'btnSaveSource', 'btnShowSourceEditor', 'btnSyncSources', 'btnShowProxyEditor', 'btnSaveProxy'];
         ids.forEach(function (id) {
           var btn = q(id);
           if (btn) {
@@ -423,42 +456,23 @@
       function getAccessToken() {
         var api = getApiClient();
         if (api && typeof api.accessToken === 'function') {
-          var token = api.accessToken();
-          if (token) {
-            return token;
-          }
+          var tok = api.accessToken();
+          if (tok) return tok;
         }
-
-        if (api && api._serverInfo && typeof api._serverInfo.AccessToken === 'string') {
-          return api._serverInfo.AccessToken;
-        }
-
+        if (api && api._serverInfo && api._serverInfo.AccessToken) return api._serverInfo.AccessToken;
         return '';
       }
 
       function appendApiKey(url) {
         var token = getAccessToken();
-        if (!token) {
-          return url;
-        }
-
-        if (url.indexOf('api_key=') !== -1) {
-          return url;
-        }
-
+        if (!token || url.indexOf('api_key=') !== -1) return url;
         return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'api_key=' + encodeURIComponent(token);
       }
 
       function getPathUrl(path) {
         var api = getApiClient();
-        if (api && typeof api.getUrl === 'function') {
-          return api.getUrl(path);
-        }
-
-        if (globalThis.location && globalThis.location.origin) {
-          return globalThis.location.origin + path;
-        }
-
+        if (api && typeof api.getUrl === 'function') return api.getUrl(path);
+        if (globalThis.location && globalThis.location.origin) return globalThis.location.origin + path;
         return path;
       }
 
@@ -466,37 +480,10 @@
         return getPathUrl('/JellyTV/m3u');
       }
 
-      function getConfigEndpoint() {
+      function configUrl() {
         var base = '/Plugins/' + encodeURIComponent(pluginId) + '/Configuration';
-        return appendApiKey(base);
-      }
-
-      function getConfigDirect() {
-        return fetch(getConfigEndpoint(), {
-          method: 'GET',
-          credentials: 'include'
-        }).then(function (response) {
-          if (!response.ok) {
-            throw new Error('HTTP ' + response.status + ' leyendo configuracion');
-          }
-          return response.json();
-        });
-      }
-
-      function saveConfigDirect(config) {
-        return fetch(getConfigEndpoint(), {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(config)
-        }).then(function (response) {
-          if (!response.ok) {
-            throw new Error('HTTP ' + response.status + ' guardando configuracion');
-          }
-          return response;
-        });
+        var token = getAccessToken();
+        return token ? base + '?api_key=' + encodeURIComponent(token) : base;
       }
 
       function getConfig() {
@@ -504,7 +491,11 @@
         if (api && typeof api.getPluginConfiguration === 'function') {
           return api.getPluginConfiguration(pluginId);
         }
-        return getConfigDirect();
+        return fetch(configUrl(), { method: 'GET', credentials: 'include' })
+          .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+          });
       }
 
       function saveConfig(config) {
@@ -512,7 +503,15 @@
         if (api && typeof api.updatePluginConfiguration === 'function') {
           return api.updatePluginConfiguration(pluginId, config);
         }
-        return saveConfigDirect(config);
+        return fetch(configUrl(), {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config)
+        }).then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r;
+        });
       }
 
       function showEditor(isEditMode, index) {
@@ -658,6 +657,9 @@
         if (!Array.isArray(state.cfg.Sources)) {
           state.cfg.Sources = [];
         }
+        if (!Array.isArray(state.cfg.Proxies)) {
+          state.cfg.Proxies = [];
+        }
 
         var tokenRefresh = q('TokenRefreshMarginSeconds');
         var timeout = q('RequestTimeoutSeconds');
@@ -674,6 +676,7 @@
         if (verbose) verbose.checked = !!state.cfg.VerboseLogging;
 
         renderSourcesTable();
+        renderProxiesTable();
       }
 
       function collectConfigFromForm() {
@@ -682,6 +685,9 @@
         }
         if (!Array.isArray(state.cfg.Sources)) {
           state.cfg.Sources = [];
+        }
+        if (!Array.isArray(state.cfg.Proxies)) {
+          state.cfg.Proxies = [];
         }
 
         state.cfg.TokenRefreshMarginSeconds = getInt('TokenRefreshMarginSeconds', 30);
@@ -877,39 +883,199 @@
         });
       }
 
-      function updateHealth(kind, text) {
-        var dot = q('healthDot');
-        var label = q('pingStatusText');
-        if (!dot || !label) {
+      // ── Proxy CRUD ─────────────────────────────────────────────────────────
+
+      function renderProxiesTable() {
+        var body = q('proxiesTableBody');
+        if (!body) return;
+        body.innerHTML = '';
+
+        if (!state.cfg || !Array.isArray(state.cfg.Proxies) || state.cfg.Proxies.length === 0) {
+          var emptyRow = document.createElement('tr');
+          var emptyCell = document.createElement('td');
+          emptyCell.colSpan = 4;
+          emptyCell.className = 'jt-muted';
+          emptyCell.textContent = 'No hay proxies configurados.';
+          emptyRow.appendChild(emptyCell);
+          body.appendChild(emptyRow);
           return;
         }
 
-        dot.className = 'jt-dot ' + kind;
-        label.textContent = text;
+        state.cfg.Proxies.forEach(function (proxy, index) {
+          var row = document.createElement('tr');
+
+          var colHost = document.createElement('td');
+          colHost.className = 'jt-url';
+          colHost.textContent = proxy.Host || '';
+          row.appendChild(colHost);
+
+          var colPort = document.createElement('td');
+          colPort.textContent = proxy.Port || '';
+          row.appendChild(colPort);
+
+          var colScheme = document.createElement('td');
+          colScheme.textContent = proxy.UseHttps ? 'HTTPS' : 'HTTP';
+          colScheme.style.color = proxy.UseHttps ? '#4caf50' : '#9fa4a8';
+          row.appendChild(colScheme);
+
+          var colState = document.createElement('td');
+          colState.textContent = proxy.IsEnabled ? 'Activo' : 'Desactivado';
+          colState.style.color = proxy.IsEnabled ? '#4caf50' : '#f44336';
+          row.appendChild(colState);
+
+          var colActions = document.createElement('td');
+          var actions = document.createElement('div');
+          actions.className = 'jt-actions';
+
+          var editBtn = document.createElement('button');
+          editBtn.type = 'button';
+          editBtn.className = 'raised button-submit emby-button jt-inline-btn jt-primary';
+          editBtn.textContent = 'Editar';
+          editBtn.addEventListener('click', function () { showProxyEditor(true, index); });
+          actions.appendChild(editBtn);
+
+          var toggleBtn = document.createElement('button');
+          toggleBtn.type = 'button';
+          toggleBtn.className = 'emby-button jt-inline-btn ' + (proxy.IsEnabled ? 'jt-danger' : 'jt-primary');
+          toggleBtn.textContent = proxy.IsEnabled ? 'Desactivar' : 'Activar';
+          toggleBtn.addEventListener('click', function () { toggleProxy(index); });
+          actions.appendChild(toggleBtn);
+
+          var deleteBtn = document.createElement('button');
+          deleteBtn.type = 'button';
+          deleteBtn.className = 'emby-button jt-inline-btn jt-danger';
+          deleteBtn.textContent = 'Eliminar';
+          deleteBtn.addEventListener('click', function () { deleteProxy(index); });
+          actions.appendChild(deleteBtn);
+
+          colActions.appendChild(actions);
+          row.appendChild(colActions);
+          body.appendChild(row);
+        });
       }
 
-      function checkPing() {
-        var url = getPathUrl('/JellyTV/ping');
-        fetch(url, { credentials: 'include' }).then(function (response) {
-          if (!response.ok) {
-            throw new Error('HTTP ' + response.status);
-          }
-          return response.text();
-        }).then(function (text) {
-          var isAlive = /ALIVE\s*=\s*true/i.test(text);
-          var sourceMatch = /Sources\s*=\s*(\d+)/i.exec(text);
-          var sources = sourceMatch ? Number.parseInt(sourceMatch[1], 10) : 0;
-          if (Number.isNaN(sources)) {
-            sources = 0;
-          }
+      function showProxyEditor(isEditMode, index) {
+        var panel = q('proxyEditor');
+        var title = q('proxyEditorTitle');
+        var button = q('btnShowProxyEditor');
+        var hostInput = q('proxyHost');
+        var portInput = q('proxyPort');
+        var userInput = q('proxyUsername');
+        var passInput = q('proxyPassword');
+        var httpsCheck = q('proxyUseHttps');
 
-          if (isAlive) {
-            updateHealth('ok', 'Activo, ' + sources + ' fuente(s) configurada(s)');
-          } else {
-            updateHealth('fail', 'Sin respuesta del plugin');
-          }
-        }).catch(function () {
-          updateHealth('fail', 'Sin respuesta del plugin');
+        if (!panel || !title || !button || !hostInput || !portInput) return;
+
+        panel.style.display = 'block';
+
+        if (isEditMode && state.cfg && Array.isArray(state.cfg.Proxies) && state.cfg.Proxies[index]) {
+          var entry = state.cfg.Proxies[index];
+          state.proxyEditorIndex = index;
+          title.textContent = 'Editar proxy';
+          button.textContent = 'Agregar nuevo proxy';
+          hostInput.value = entry.Host || '';
+          portInput.value = entry.Port || 8080;
+          if (userInput) userInput.value = entry.Username || '';
+          if (passInput) passInput.value = entry.Password || '';
+          if (httpsCheck) httpsCheck.checked = !!entry.UseHttps;
+        } else {
+          state.proxyEditorIndex = -1;
+          title.textContent = 'Agregar proxy';
+          button.textContent = 'Ocultar editor';
+          hostInput.value = '';
+          portInput.value = '8080';
+          if (userInput) userInput.value = '';
+          if (passInput) passInput.value = '';
+          if (httpsCheck) httpsCheck.checked = false;
+        }
+
+        hostInput.focus();
+      }
+
+      function hideProxyEditor() {
+        var panel = q('proxyEditor');
+        var button = q('btnShowProxyEditor');
+        if (panel) panel.style.display = 'none';
+        if (button) button.textContent = 'Agregar proxy';
+        state.proxyEditorIndex = -1;
+      }
+
+      function saveProxyFromEditor() {
+        if (!state.cfg) { setStatus('proxyStatus', 'Config aun no cargada.', true); return; }
+
+        var wasEditing = state.proxyEditorIndex >= 0;
+        var hostInput = q('proxyHost');
+        var portInput = q('proxyPort');
+        var userInput = q('proxyUsername');
+        var passInput = q('proxyPassword');
+
+        var host = hostInput ? hostInput.value.trim() : '';
+        var port = portInput ? Number.parseInt(portInput.value, 10) : 0;
+        var httpsCheck = q('proxyUseHttps');
+
+        if (!host || !port || Number.isNaN(port)) {
+          setStatus('proxyStatus', 'Host y puerto son obligatorios.', true);
+          return;
+        }
+
+        if (!Array.isArray(state.cfg.Proxies)) state.cfg.Proxies = [];
+
+        var entry = {
+          Host: host,
+          Port: port,
+          Username: userInput ? userInput.value.trim() : '',
+          Password: passInput ? passInput.value : '',
+          UseHttps: !!(httpsCheck && httpsCheck.checked),
+          IsEnabled: true
+        };
+
+        if (state.proxyEditorIndex >= 0 && state.cfg.Proxies[state.proxyEditorIndex]) {
+          entry.Id = state.cfg.Proxies[state.proxyEditorIndex].Id;
+          entry.IsEnabled = state.cfg.Proxies[state.proxyEditorIndex].IsEnabled;
+          state.cfg.Proxies[state.proxyEditorIndex] = entry;
+        } else {
+          entry.Id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+          state.cfg.Proxies.push(entry);
+        }
+
+        saveConfig(state.cfg).then(function () {
+          renderProxiesTable();
+          hideProxyEditor();
+          var ok = wasEditing ? 'Proxy actualizado.' : 'Proxy agregado.';
+          setStatus('proxyStatus', ok, false);
+          clearStatusLater('proxyStatus', ok, 2500);
+        }).catch(function (error) {
+          var detail = error && error.message ? error.message : String(error);
+          setStatus('proxyStatus', 'Error guardando proxy: ' + detail, true);
+        });
+      }
+
+      function deleteProxy(index) {
+        if (!state.cfg || !Array.isArray(state.cfg.Proxies)) return;
+        if (!globalThis.confirm('Eliminar este proxy?')) return;
+
+        var removed = state.cfg.Proxies.splice(index, 1);
+        saveConfig(state.cfg).then(function () {
+          renderProxiesTable();
+          var ok = 'Proxy eliminado.';
+          setStatus('proxyStatus', ok, false);
+          clearStatusLater('proxyStatus', ok, 2500);
+        }).catch(function (error) {
+          state.cfg.Proxies.splice(index, 0, removed[0]);
+          var detail = error && error.message ? error.message : String(error);
+          setStatus('proxyStatus', 'Error eliminando: ' + detail, true);
+        });
+      }
+
+      function toggleProxy(index) {
+        if (!state.cfg || !Array.isArray(state.cfg.Proxies) || !state.cfg.Proxies[index]) return;
+        state.cfg.Proxies[index].IsEnabled = !state.cfg.Proxies[index].IsEnabled;
+        saveConfig(state.cfg).then(function () {
+          renderProxiesTable();
+        }).catch(function (error) {
+          state.cfg.Proxies[index].IsEnabled = !state.cfg.Proxies[index].IsEnabled;
+          var detail = error && error.message ? error.message : String(error);
+          setStatus('proxyStatus', 'Error actualizando proxy: ' + detail, true);
         });
       }
 
@@ -993,21 +1159,34 @@
           });
         }
 
+        var showProxyEditorBtn = q('btnShowProxyEditor');
+        var saveProxyBtn = q('btnSaveProxy');
+        var cancelProxyBtn = q('btnCancelProxy');
+
+        if (showProxyEditorBtn) {
+          showProxyEditorBtn.addEventListener('click', function () {
+            var panel = q('proxyEditor');
+            if (panel && panel.style.display !== 'none') {
+              hideProxyEditor();
+            } else {
+              showProxyEditor(false, -1);
+            }
+          });
+        }
+
+        if (saveProxyBtn) {
+          saveProxyBtn.addEventListener('click', saveProxyFromEditor);
+        }
+
+        if (cancelProxyBtn) {
+          cancelProxyBtn.addEventListener('click', hideProxyEditor);
+        }
+
         state.wired = true;
       }
 
-      function ensurePingTimer() {
-        if (state.pingTimer) {
-          return;
-        }
-
-        state.pingTimer = setInterval(function () {
-          checkPing();
-        }, 30000);
-      }
-
       function hasDom() {
-        return !!(q('JellyTVConfigForm') && q('sourcesTableBody') && q('btnSaveAll') && q('healthDot'));
+        return !!(q('JellyTVConfigForm') && q('sourcesTableBody') && q('proxiesTableBody') && q('btnSaveAll'));
       }
 
       function scheduleRetry() {
@@ -1048,12 +1227,10 @@
         bindUi();
 
         if (!state.bootstrapped) {
-          ensurePingTimer();
           state.bootstrapped = true;
         }
 
         loadConfig();
-        checkPing();
 
         globalThis.__JellyTVConfigBootstrapped = true;
       }

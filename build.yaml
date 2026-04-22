@@ -1,0 +1,27 @@
+---
+# Jellyfin Plugin Manifest
+# Used by the Jellyfin Plugin Repository system.
+# See: https://jellyfin.org/docs/general/server/plugins/
+
+name: JellyTV
+guid: f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c
+description: >
+  IPTV proxy plugin with automatic token renewal, HLS broadcast engine,
+  and configurable M3U source management.
+
+overview: >
+  JellyTV aggregates multiple M3U/IPTV sources, rewrites stream URLs through
+  an internal proxy, and maintains HLS playback sessions with rotating token
+  refresh — providing stable Live TV across providers that use short-lived tokens.
+
+category: LiveTV
+owner: jorge.chavez@nezter.com
+imageUrl: ""
+
+versions:
+  - version: 1.0.0.0
+    changelog: Simplified broadcast engine — full-chain resolve per poll, proxy rotation, no token state.
+    targetAbi: "10.10.0.0"
+    sourceUrl: ""
+    checksum: ""
+    timestamp: "2026-04-21T00:00:00Z"

@@ -25,7 +25,7 @@ public class SessionManagerService : BackgroundService
     private static readonly TimeSpan SessionTimeout = TimeSpan.FromMinutes(30);
 
     // After a non-auth upstream failure (400, 5xx), wait this long before retrying
-    private static readonly TimeSpan ResolveFailureBackoff = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ResolveFailureBackoff = TimeSpan.FromSeconds(15);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SessionManagerService"/> class.
@@ -59,9 +59,21 @@ public class SessionManagerService : BackgroundService
 
         if (_sessions.TryGetValue(key, out var existing))
         {
-            existing.LastAccessedAt = DateTimeOffset.UtcNow;
-            _logger.LogDebug("[JellyTV] Reusing session {Id} for {Url}", existing.SessionId, upstreamUrl);
-            return existing;
+            // Validate the cached session's UpstreamUrl matches the requested key.
+            // If they differ the session was corrupted by the old code that overwrote UpstreamUrl
+            // with an intermediate hop (e.g. alfa.7057460.xyz). Evict and re-create.
+            if (!string.Equals(existing.UpstreamUrl, key, StringComparison.Ordinal))
+            {
+                _logger.LogWarning("[JellyTV] Evicting corrupted session {Id} (UpstreamUrl={Bad} != key={Key})",
+                    existing.SessionId, existing.UpstreamUrl, key);
+                _sessions.TryRemove(key, out _);
+            }
+            else
+            {
+                existing.LastAccessedAt = DateTimeOffset.UtcNow;
+                _logger.LogDebug("[JellyTV] Reusing session {Id} for {Url}", existing.SessionId, upstreamUrl);
+                return existing;
+            }
         }
 
         var session = new StreamSession { UpstreamUrl = upstreamUrl };
@@ -132,7 +144,8 @@ public class SessionManagerService : BackgroundService
         session.IsRenewing = true;
         try
         {
-            _logger.LogInformation("[JellyTV] Renewing token for session {Id}", session.SessionId);
+            _logger.LogInformation("[JellyTV] Renewing token for session {Id} upstream={Url}",
+                session.SessionId, session.UpstreamUrl);
 
             HttpRequestException? lastAuthException = null;
             Exception? lastException = null;
@@ -143,12 +156,6 @@ public class SessionManagerService : BackgroundService
                 {
                     var resolved = await _resolver.ResolveAsync(candidate, ct).ConfigureAwait(false);
                     session.LastResolved = resolved;
-
-                    // If we discovered a better non-token seed URL, keep it for future renewals.
-                    if (!IsLikelyTokenizedUrl(candidate))
-                    {
-                        session.UpstreamUrl = candidate;
-                    }
 
                     _resolveFailures.TryRemove(session.UpstreamUrl, out _);
                     _logger.LogInformation("[JellyTV] Token renewed for session {Id}. Seed={Seed} Final={Url}",
@@ -245,58 +252,12 @@ public class SessionManagerService : BackgroundService
 
     private static IEnumerable<string> BuildRenewalCandidates(StreamSession session)
     {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-
-        void Track(string? value)
-        {
-            if (string.IsNullOrWhiteSpace(value)) return;
-            seen.Add(value);
-            var q = value.IndexOf('?', StringComparison.Ordinal);
-            if (q > 0) seen.Add(value[..q]);
-        }
-
-        Track(session.UpstreamUrl);
-        Track(session.LastResolved?.OriginalUrl);
-        Track(session.LastResolved?.FinalUrl);
-
-        if (session.LastResolved?.RedirectChain is { Count: > 0 } chain)
-        {
-            foreach (var hop in chain)
-                Track(hop);
-        }
-
-        // PlaylistPollUrl is the penultimate-hop URL (e.g. alfa.7057460.xyz) that
-        // generates a fresh token via 302 redirect on each hit — no stale token queried.
-        // Bubble it to the front of non-tokenized candidates and, when it is non-tokenized,
-        // skip tokenized candidates entirely (the redirect will mint fresh ones).
-        var pollUrl = session.LastResolved?.PlaylistPollUrl;
-        bool pollUrlIsNonToken = !string.IsNullOrWhiteSpace(pollUrl) && !IsLikelyTokenizedUrl(pollUrl);
-
-        var nonTokenized = new List<string>();
-        var tokenized    = new List<string>();
-
-        foreach (var candidate in seen)
-        {
-            if (IsLikelyTokenizedUrl(candidate))
-                tokenized.Add(candidate);
-            else
-                nonTokenized.Add(candidate);
-        }
-
-        // Ensure PlaylistPollUrl is tried first among non-tokenized candidates.
-        if (pollUrlIsNonToken && nonTokenized.Remove(pollUrl!))
-            nonTokenized.Insert(0, pollUrl!);
-
-        foreach (var candidate in nonTokenized)
-            yield return candidate;
-
-        // When a non-tokenized PlaylistPollUrl is available, omit stale tokenized
-        // candidates — hitting them would only produce 403s with expired tokens.
-        if (!pollUrlIsNonToken)
-        {
-            foreach (var candidate in tokenized)
-                yield return candidate;
-        }
+        // Only the stable origin URL. Chain hops (e.g. api.nerdtv, alfa) all route
+        // through the same token router and get the same cached/stale token on rapid
+        // sequential requests. Trying them adds HTTP requests without improving the
+        // recovery rate — and the burst triggers stricter CDN rate-limiting, extending
+        // the outage from ~2 s (single candidate) to 5+ s and risking a temporary ban.
+        yield return session.UpstreamUrl;
     }
 
     /// <summary>
