@@ -1,203 +1,180 @@
 <!DOCTYPE html>
 <html lang="es">
-<head>
-<meta charset="utf-8"/>
-<title>JellyTV</title>
-<style>
-  .jellytv-wrap {
-    max-width: 1020px;
-  }
-
-  .jt-toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    align-items: center;
-  }
-
-  .jt-status-line {
-    min-height: 1.3em;
-    font-size: .9em;
-  }
-
-  .jt-note {
-    margin-top: .45em;
-  }
-
-  .jt-card {
-    margin-bottom: 14px;
-  }
-
-  .jt-tableWrap {
-    overflow: auto;
-    border: 1px solid var(--divider-color, rgba(255,255,255,.08));
-    border-radius: 8px;
-    margin-top: 10px;
-  }
-
-  .jt-table {
-    width: 100%;
-    border-collapse: collapse;
-    min-width: 720px;
-  }
-
-  .jt-table th,
-  .jt-table td {
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--divider-color, rgba(255,255,255,.08));
-    text-align: left;
-    vertical-align: top;
-    font-size: .88em;
-  }
-
-  .jt-table th {
-    font-weight: 600;
-    color: var(--secondary-text-color, #b9b9b9);
-    background: rgba(255,255,255,.03);
-  }
-
-  .jt-table tr:last-child td {
-    border-bottom: none;
-  }
-
-  .jt-url {
-    font-family: Consolas, monospace;
-    font-size: .82em;
-    word-break: break-all;
-    color: #cfd8dc;
-  }
-
-  .jt-small {
-    font-size: .8em;
-    color: var(--secondary-text-color, #9fa4a8);
-  }
-
-  .jt-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .jt-inline-btn {
-    min-width: auto !important;
-    padding: 6px 10px !important;
-    font-size: .78em !important;
-  }
-
-  .jt-danger {
-    background: #8b1e2f !important;
-    border-color: #8b1e2f !important;
-    color: #ffffff !important;
-  }
-
-  .jt-primary {
-    background: #0076b8 !important;
-    border-color: #0076b8 !important;
-    color: #ffffff !important;
-  }
-
-  .jt-panel {
-    margin-top: 12px;
-    padding: 12px 14px;
-    border-radius: 8px;
-    border: 1px solid rgba(0,164,220,.45);
-    background: rgba(0,164,220,.06);
-  }
-
-  .jt-tuner-box {
-    margin-top: 8px;
-  }
-
-  .jt-muted {
-    color: var(--secondary-text-color, #9fa4a8);
-    font-size: .88em;
-  }
-
-  .checkboxContainer {
-    margin-top: 8px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .checkboxContainer .checkboxLabel {
-    margin: 0;
-    cursor: pointer;
-  }
-</style>
-</head>
+<head><meta charset="utf-8"/><title>JellyTV</title></head>
 <body>
 <div id="JellyTVConfigPage"
      data-role="page"
-  data-require="emby-input,emby-button"
+     data-require="emby-input,emby-button"
      data-pluginuniqueid="f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c"
      class="page type-interior pluginConfigurationPage">
+
+  <!-- ★ Style va DENTRO del div de la página para que Jellyfin lo procese ★ -->
+  <style>
+  .jt-tab-bar {
+    display: flex;
+    border-bottom: 1px solid rgba(255,255,255,.12);
+    margin-bottom: 1.5em;
+  }
+  .jt-tab-btn {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: rgba(255,255,255,.5);
+    cursor: pointer;
+    padding: 10px 20px;
+    font-size: .9em;
+    font-weight: 500;
+    margin-bottom: -1px;
+    transition: color .2s, border-color .2s;
+  }
+  .jt-tab-btn:hover { color: rgba(255,255,255,.85); }
+  .jt-tab-btn.active {
+    color: var(--primary-accent-color, #00a4dc);
+    border-bottom-color: var(--primary-accent-color, #00a4dc);
+  }
+
+  /* Tabs ocultan su contenido — CRITICAL */
+  .jt-tab-content { display: none !important; }
+  .jt-tab-content.active { display: block !important; }
+
+  /* Boton rojo */
+  .raised.button-cancel.emby-button { background-color: #c0392b !important; color: #fff !important; }
+
+  /* Boton secundario (gris) */
+  .jt-secondary {
+    background: rgba(255,255,255,.1) !important;
+    color: rgba(255,255,255,.8) !important;
+    border: 1px solid rgba(255,255,255,.15) !important;
+  }
+
+  /* Panel editor inline */
+  .jt-panel {
+    margin-top: 1em;
+    padding: 1em 1.2em;
+    border-radius: 6px;
+    border: 1px solid rgba(0,164,220,.3);
+    background: rgba(0,164,220,.04);
+  }
+  .jt-panel h4 { margin: 0 0 .8em; font-size: .95em; font-weight: 600; }
+
+  /* Tabla */
+  .jt-tableWrap {
+    overflow-x: auto;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 6px;
+    margin-top: 1em;
+  }
+  .jt-table { width: 100%; border-collapse: collapse; min-width: 540px; }
+  .jt-table th {
+    padding: 9px 14px;
+    text-align: left;
+    font-size: .82em;
+    font-weight: 600;
+    color: rgba(255,255,255,.5);
+    background: rgba(255,255,255,.03);
+    border-bottom: 1px solid rgba(255,255,255,.08);
+  }
+  .jt-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+    vertical-align: middle;
+  }
+  .jt-table tr:last-child td { border-bottom: none; }
+  .jt-url { font-family: Consolas, monospace; font-size: .8em; color: rgba(255,255,255,.55); word-break: break-all; }
+
+  /* Badges */
+  .jt-badge { display: inline-block; font-size: .72em; padding: 2px 8px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
+  .jt-badge-green { background: rgba(76,175,80,.15);  color: #4caf50; }
+  .jt-badge-red   { background: rgba(244,67,54,.12);  color: #ef5350; }
+  .jt-badge-gray  { background: rgba(255,255,255,.08); color: rgba(255,255,255,.45); }
+
+  /* Botones pequeños dentro de celdas */
+  .jt-cell-actions { display: flex; gap: 4px; }
+  .jt-cell-actions .emby-button {
+    padding: 3px 9px !important;
+    min-width: 0 !important;
+    font-size: .78em !important;
+    white-space: nowrap;
+  }
+
+  /* Toolbar */
+  .jt-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: .75em; }
+
+  /* Status */
+  .jt-status { min-height: 1em; font-size: .85em; margin-top: .4em; }
+
+  /* Grid 2 columnas para inputs numericos */
+  .jt-grid-2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 280px));
+    gap: 0 20px;
+  }
+
+  /* Tuner */
+  .jt-tuner-row { display: flex; align-items: center; gap: 10px; padding: .4em 0 .6em; flex-wrap: wrap; }
+  .jt-tuner-url { font-family: Consolas, monospace; font-size: .84em; color: rgba(255,255,255,.6); flex: 1; min-width: 140px; }
+
+  /* Checks */
+  .jt-checks { display: flex; gap: 20px; flex-wrap: wrap; margin: .75em 0 .25em; }
+  </style>
+
   <div data-role="content">
-    <div class="content-primary jellytv-wrap">
+    <div class="content-primary">
+
+      <div class="verticalSection">
+        <h2 class="sectionTitle">JellyTV</h2>
+      </div>
+      <hr/>
+
+      <!-- Tab bar -->
+      <div class="jt-tab-bar">
+        <button class="jt-tab-btn active" type="button" data-tab="sources">Fuentes M3U</button>
+        <button class="jt-tab-btn" type="button" data-tab="proxies">Proxies</button>
+        <button class="jt-tab-btn" type="button" data-tab="settings">Configuracion</button>
+      </div>
+
       <form id="JellyTVConfigForm">
 
-        <fieldset class="verticalSection-extrabottompadding jt-card">
-          <legend class="sectionTitle"><h3>Fuentes M3U / IPTV</h3></legend>
-          <div class="configSection">
-            <div class="fieldDescription">Gestiona todas tus fuentes en una tabla unificada y edita cada entrada sin salir de la pagina.</div>
-
-            <div class="jt-toolbar">
-              <button id="btnShowSourceEditor" is="emby-button" type="button" class="raised button-submit emby-button jt-primary">
-                <span>Agregar fuente</span>
-              </button>
-              <button id="btnSyncSources" is="emby-button" type="button" class="emby-button">
-                <span>Sincronizar fuentes</span>
-              </button>
-            </div>
-
-            <div id="sourceEditor" class="jt-panel" style="display:none;">
-              <h4 id="sourceEditorTitle" class="sectionTitle" style="margin-top:0;">Agregar fuente</h4>
-              <div class="inputContainer">
-                <label class="inputLabel inputLabelUnfocused" for="newName">Nombre de la fuente</label>
-                <input id="newName" is="emby-input" name="newName" type="text" class="emby-input" placeholder="Proveedor IPTV" autocomplete="off"/>
-              </div>
-              <div class="inputContainer">
-                <label class="inputLabel inputLabelUnfocused" for="newUrl">URL del M3U</label>
-                <input id="newUrl" is="emby-input" name="newUrl" type="text" class="emby-input" placeholder="https://proveedor.com/lista.m3u" autocomplete="off"/>
-              </div>
-              <div class="jt-toolbar">
-                <button id="btnSaveSource" is="emby-button" type="button" class="raised button-submit emby-button jt-primary"><span>Guardar fuente</span></button>
-                <button id="btnCancelSource" is="emby-button" type="button" class="emby-button jt-danger"><span>Cancelar</span></button>
-              </div>
-            </div>
-
-            <div class="jt-tableWrap">
-              <table class="jt-table" aria-label="Tabla de fuentes configuradas">
-                <thead>
-                  <tr>
-                    <th>Fuente</th>
-                    <th>URL</th>
-                    <th>Estado</th>
-                    <th>Ultima sync</th>
-                    <th>Acciones</th>
-                  </tr>
-                </thead>
-                <tbody id="sourcesTableBody"></tbody>
-              </table>
-            </div>
-
-            <div id="globalStatus" class="jt-status-line jt-note"></div>
+        <!-- ══ Fuentes M3U ═══════════════════════════════════════════════ -->
+        <div id="jt-tab-sources" class="jt-tab-content active">
+          <div class="fieldDescription">Gestiona las fuentes M3U del plugin.</div>
+          <div class="jt-toolbar">
+            <button id="btnShowSourceEditor" is="emby-button" type="button" class="raised button-submit emby-button"><span>Agregar fuente</span></button>
+            <button id="btnSyncSources" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Sincronizar fuentes</span></button>
           </div>
-        </fieldset>
-
-        <fieldset class="verticalSection-extrabottompadding jt-card">
-          <legend class="sectionTitle"><h3>Pool de proxies</h3></legend>
-          <div class="configSection">
-            <div class="fieldDescription">Proxies HTTPS para resoluciones de cadena. Los segmentos se descargan directamente sin proxy.</div>
-
-            <div class="jt-toolbar">
-              <button id="btnShowProxyEditor" is="emby-button" type="button" class="raised button-submit emby-button jt-primary">
-                <span>Agregar proxy</span>
-              </button>
+          <div id="sourceEditor" class="jt-panel" style="display:none;">
+            <h4 id="sourceEditorTitle">Agregar fuente</h4>
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="newName">Nombre</label>
+              <input id="newName" is="emby-input" type="text" class="emby-input" placeholder="Mi proveedor IPTV" autocomplete="off"/>
             </div>
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="newUrl">URL del M3U</label>
+              <input id="newUrl" is="emby-input" type="text" class="emby-input" placeholder="https://proveedor.com/lista.m3u" autocomplete="off"/>
+            </div>
+            <div class="jt-toolbar">
+              <button id="btnSaveSource" is="emby-button" type="button" class="raised button-submit emby-button"><span>Guardar</span></button>
+              <button id="btnCancelSource" is="emby-button" type="button" class="raised button-cancel emby-button"><span>Cancelar</span></button>
+            </div>
+          </div>
+          <div class="jt-tableWrap">
+            <table class="jt-table">
+              <thead><tr><th>Nombre</th><th>URL</th><th>Estado</th><th>Ultima sync</th><th>Acciones</th></tr></thead>
+              <tbody id="sourcesTableBody"></tbody>
+            </table>
+          </div>
+          <div id="globalStatus" class="jt-status"></div>
+        </div>
 
-            <div id="proxyEditor" class="jt-panel" style="display:none;">
-              <h4 id="proxyEditorTitle" class="sectionTitle" style="margin-top:0;">Agregar proxy</h4>
+        <!-- ══ Proxies ═══════════════════════════════════════════════════ -->
+        <div id="jt-tab-proxies" class="jt-tab-content">
+          <div class="fieldDescription">Proxies HTTPS para resolver cadenas de redireccion. Los segmentos se descargan siempre directo, sin proxy.</div>
+          <div class="jt-toolbar">
+            <button id="btnShowProxyEditor" is="emby-button" type="button" class="raised button-submit emby-button"><span>Agregar proxy</span></button>
+          </div>
+          <div id="proxyEditor" class="jt-panel" style="display:none;">
+            <h4 id="proxyEditorTitle">Agregar proxy</h4>
+            <div class="jt-grid-2">
               <div class="inputContainer">
                 <label class="inputLabel inputLabelUnfocused" for="proxyHost">Host / IP</label>
                 <input id="proxyHost" is="emby-input" type="text" class="emby-input" placeholder="192.168.1.1" autocomplete="off"/>
@@ -214,101 +191,75 @@
                 <label class="inputLabel inputLabelUnfocused" for="proxyPassword">Contrasena (opcional)</label>
                 <input id="proxyPassword" is="emby-input" type="password" class="emby-input" autocomplete="off"/>
               </div>
-              <div class="checkboxContainer">
-                <input id="proxyUseHttps" type="checkbox"/>
-                <label class="checkboxLabel emby-checkbox-label" for="proxyUseHttps">Proxy HTTPS (el proxy mismo habla TLS)</label>
-              </div>
-              <div class="jt-toolbar">
-                <button id="btnSaveProxy" is="emby-button" type="button" class="raised button-submit emby-button jt-primary"><span>Guardar proxy</span></button>
-                <button id="btnCancelProxy" is="emby-button" type="button" class="emby-button jt-danger"><span>Cancelar</span></button>
-              </div>
             </div>
-
-            <div class="jt-tableWrap">
-              <table class="jt-table" aria-label="Tabla de proxies configurados">
-                <thead>
-                  <tr>
-                    <th>Host</th>
-                    <th>Puerto</th>
-                    <th>Esquema</th>
-                    <th>Estado</th>
-                    <th>Acciones</th>
-                  </tr>
-                </thead>
-                <tbody id="proxiesTableBody"></tbody>
-              </table>
+            <div class="checkboxContainer" style="margin-top:.75em;">
+              <input id="proxyUseHttps" type="checkbox"/>
+              <label class="checkboxLabel emby-checkbox-label" for="proxyUseHttps">El proxy usa TLS (HTTPS)</label>
             </div>
-
-            <div id="proxyStatus" class="jt-status-line jt-note"></div>
-          </div>
-        </fieldset>
-
-        <fieldset class="verticalSection-extrabottompadding jt-card">
-          <legend class="sectionTitle"><h3>Tuner en Jellyfin</h3></legend>
-          <div class="configSection">
-            <div class="fieldDescription">Usa esta URL en Live TV -> Agregar tuner -> M3U Tuner.</div>
-
-            <div class="inputContainer jt-tuner-box">
-              <label class="inputLabel inputLabelUnfocused" for="tunerUrlInput">URL del tuner</label>
-              <input id="tunerUrlInput" is="emby-input" type="text" class="emby-input" readonly />
-            </div>
-
             <div class="jt-toolbar">
-              <button id="btnCopyTuner" is="emby-button" type="button" class="raised button-submit emby-button jt-primary"><span>Copiar URL</span></button>
-              <button id="btnTestM3u" is="emby-button" type="button" class="emby-button"><span>Probar M3U</span></button>
+              <button id="btnSaveProxy" is="emby-button" type="button" class="raised button-submit emby-button"><span>Guardar</span></button>
+              <button id="btnCancelProxy" is="emby-button" type="button" class="raised button-cancel emby-button"><span>Cancelar</span></button>
             </div>
           </div>
-        </fieldset>
+          <div class="jt-tableWrap">
+            <table class="jt-table">
+              <thead><tr><th>Host</th><th>Puerto</th><th>Esquema</th><th>Estado</th><th>Acciones</th></tr></thead>
+              <tbody id="proxiesTableBody"></tbody>
+            </table>
+          </div>
+          <div id="proxyStatus" class="jt-status"></div>
+        </div>
 
-        <fieldset class="verticalSection-extrabottompadding jt-card">
-          <legend class="sectionTitle"><h3>Configuracion</h3></legend>
-          <div class="configSection">
+        <!-- ══ Configuracion ════════════════════════════════════════════ -->
+        <div id="jt-tab-settings" class="jt-tab-content">
+          <div style="margin-bottom:1.5em;">
+            <h3 class="sectionTitle" style="font-size:.95em;margin-bottom:.4em;">Tuner M3U</h3>
+            <div class="fieldDescription" style="margin-bottom:.5em;">Agrega esta URL en <strong>Live TV → Agregar sintonizador → M3U Tuner</strong>.</div>
+            <div class="jt-tuner-row">
+              <span id="tunerUrlDisplay" class="jt-tuner-url"></span>
+              <button id="btnCopyTuner" is="emby-button" type="button" class="raised button-submit emby-button"><span>Copiar URL</span></button>
+            </div>
+          </div>
+          <hr/>
+          <div class="jt-grid-2" style="margin-top:1em;">
             <div class="inputContainer">
               <label class="inputLabel inputLabelUnfocused" for="TokenRefreshMarginSeconds">Margen renovacion token (seg)</label>
               <input id="TokenRefreshMarginSeconds" is="emby-input" name="TokenRefreshMarginSeconds" type="number" min="5" max="300" class="emby-input"/>
             </div>
-
             <div class="inputContainer">
               <label class="inputLabel inputLabelUnfocused" for="RequestTimeoutSeconds">Timeout peticiones (seg)</label>
               <input id="RequestTimeoutSeconds" is="emby-input" name="RequestTimeoutSeconds" type="number" min="5" max="120" class="emby-input"/>
             </div>
-
             <div class="inputContainer">
               <label class="inputLabel inputLabelUnfocused" for="MaxRedirects">Max redirecciones</label>
               <input id="MaxRedirects" is="emby-input" name="MaxRedirects" type="number" min="1" max="30" class="emby-input"/>
             </div>
-
             <div class="inputContainer">
-              <label class="inputLabel inputLabelUnfocused" for="UserAgent">User-Agent</label>
-              <input id="UserAgent" is="emby-input" name="UserAgent" type="text" class="emby-input"/>
+              <label class="inputLabel inputLabelUnfocused" for="SourceSyncIntervalHours">Sincronizacion fuentes (horas)</label>
+              <input id="SourceSyncIntervalHours" is="emby-input" name="SourceSyncIntervalHours" type="number" min="1" max="168" class="emby-input"/>
             </div>
-
+          </div>
+          <div class="inputContainer" style="max-width:600px;">
+            <label class="inputLabel inputLabelUnfocused" for="UserAgent">User-Agent HTTP</label>
+            <input id="UserAgent" is="emby-input" name="UserAgent" type="text" class="emby-input"/>
+          </div>
+          <div class="jt-checks">
             <div class="checkboxContainer">
               <input id="AutoRegisterTuner" name="AutoRegisterTuner" type="checkbox"/>
               <label class="checkboxLabel emby-checkbox-label" for="AutoRegisterTuner">Auto-registrar tuner en Live TV</label>
             </div>
-
             <div class="checkboxContainer">
               <input id="VerboseLogging" name="VerboseLogging" type="checkbox"/>
               <label class="checkboxLabel emby-checkbox-label" for="VerboseLogging">Logging detallado (debug)</label>
             </div>
-
-            <div class="jt-toolbar" style="margin-top:12px;">
-              <button id="btnSaveAll" is="emby-button" type="button" class="raised button-submit emby-button jt-primary"><span>Guardar configuracion</span></button>
-            </div>
-            <div id="saveStatus" class="jt-status-line jt-note"></div>
           </div>
-        </fieldset>
-
-        <fieldset class="verticalSection-extrabottompadding jt-card">
-          <legend class="sectionTitle"><h3>Estado del plugin</h3></legend>
-          <div class="configSection">
-            <div class="jt-toolbar">
-              <button id="btnOpenLogs" is="emby-button" type="button" class="emby-button jt-danger"><span>Abrir logs</span></button>
-            </div>
-            <div class="fieldDescription jt-muted">Se abriran las ultimas lineas del log del plugin en una nueva pestaña.</div>
+          <div class="jt-toolbar" style="margin-top:1.25em;">
+            <button id="btnSaveAll" is="emby-button" type="button" class="raised button-submit emby-button"><span>Guardar configuracion</span></button>
+            <button id="btnOpenLogs" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Ver logs</span></button>
           </div>
-        </fieldset>
+          <div id="saveStatus" class="jt-status"></div>
+        </div>
+
       </form>
     </div>
   </div>
@@ -319,961 +270,350 @@
 
       var pluginId = 'f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c';
       var state = {
-        page: null,
-        cfg: null,
-        wired: false,
-        bootstrapped: false,
-        lastBootstrapAt: 0,
-        editorIndex: -1,
-        proxyEditorIndex: -1,
-        retryTimer: null
+        page: null, cfg: null, wired: false, bootstrapped: false,
+        lastBootstrapAt: 0, editorIndex: -1, proxyEditorIndex: -1, retryTimer: null
       };
 
-      function tryGet(fn) {
-        try {
-          return fn();
-        } catch (error) {
-          return null;
-        }
-      }
-
-      function findPage() {
-        var pages = document.querySelectorAll('#JellyTVConfigPage');
-        return pages.length ? pages[pages.length - 1] : null;
-      }
-
+      function tryGet(fn) { try { return fn(); } catch(e) { return null; } }
+      function findPage() { var p = document.querySelectorAll('#JellyTVConfigPage'); return p.length ? p[p.length-1] : null; }
       function ensurePage(page) {
-        if (page && page !== state.page) {
-          state.page = page;
-          state.wired = false;
-          state.bootstrapped = false;
-        }
-
+        if (page && page !== state.page) { state.page = page; state.wired = false; state.bootstrapped = false; }
         if (!state.page || !document.body.contains(state.page)) {
-          var latest = findPage();
-          if (latest !== state.page) {
-            state.page = latest;
-            state.wired = false;
-            state.bootstrapped = false;
-          }
+          var l = findPage(); if (l !== state.page) { state.page = l; state.wired = false; state.bootstrapped = false; }
         }
-
         return state.page;
       }
+      function q(id) { var p = ensurePage(); return p ? p.querySelector('#' + id) : null; }
 
-      function q(id) {
-        var page = ensurePage();
-        return page ? page.querySelector('#' + id) : null;
-      }
-
-      function setStatus(id, msg, isError) {
-        var el = q(id);
-        if (!el) {
-          return;
-        }
+      function setStatus(id, msg, isErr) {
+        var el = q(id); if (!el) return;
         el.textContent = msg || '';
-        el.style.color = isError ? '#f44336' : '#4caf50';
+        el.style.color = isErr ? '#ef5350' : '#4caf50';
       }
-
-      function clearStatusLater(id, msg, delayMs) {
-        setTimeout(function () {
-          var el = q(id);
-          if (el && el.textContent === msg) {
-            el.textContent = '';
-          }
-        }, delayMs || 3000);
+      function clearLater(id, msg, ms) {
+        setTimeout(function() { var el = q(id); if (el && el.textContent === msg) el.textContent = ''; }, ms || 3000);
       }
-
-      function getInt(id, fallback) {
-        var el = q(id);
-        if (!el) {
-          return fallback;
-        }
-        var value = Number.parseInt(el.value, 10);
-        return Number.isNaN(value) ? fallback : value;
-      }
-
-      function setBusy(isBusy) {
-        var ids = ['btnSaveAll', 'btnSaveSource', 'btnShowSourceEditor', 'btnSyncSources', 'btnShowProxyEditor', 'btnSaveProxy'];
-        ids.forEach(function (id) {
-          var btn = q(id);
-          if (btn) {
-            btn.disabled = !!isBusy;
-          }
+      function getInt(id, fb) { var el = q(id); if (!el) return fb; var v = parseInt(el.value, 10); return isNaN(v) ? fb : v; }
+      function setBusy(b) {
+        ['btnSaveAll','btnSaveSource','btnShowSourceEditor','btnSyncSources','btnShowProxyEditor','btnSaveProxy'].forEach(function(id) {
+          var el = q(id); if (el) el.disabled = !!b;
         });
       }
 
       function getApiClient() {
-        if (typeof ApiClient !== 'undefined' && ApiClient) {
-          return ApiClient;
-        }
-        if (typeof globalThis !== 'undefined' && globalThis.ApiClient) {
-          return globalThis.ApiClient;
-        }
-
-        var parentApi = tryGet(function () {
-          return globalThis.window && globalThis.window.parent ? globalThis.window.parent.ApiClient : null;
-        });
-        if (parentApi) {
-          return parentApi;
-        }
-
-        var topApi = tryGet(function () {
-          return globalThis.window && globalThis.window.top ? globalThis.window.top.ApiClient : null;
-        });
-        if (topApi) {
-          return topApi;
-        }
-
-        return null;
+        if (typeof ApiClient !== 'undefined' && ApiClient) return ApiClient;
+        return tryGet(function(){ return window.ApiClient; })
+            || tryGet(function(){ return window.parent.ApiClient; })
+            || null;
       }
-
       function getDashboard() {
-        if (typeof Dashboard !== 'undefined' && Dashboard) {
-          return Dashboard;
-        }
-        if (typeof globalThis !== 'undefined' && globalThis.Dashboard) {
-          return globalThis.Dashboard;
-        }
-
-        var parentDashboard = tryGet(function () {
-          return globalThis.window && globalThis.window.parent ? globalThis.window.parent.Dashboard : null;
-        });
-        if (parentDashboard) {
-          return parentDashboard;
-        }
-
-        var topDashboard = tryGet(function () {
-          return globalThis.window && globalThis.window.top ? globalThis.window.top.Dashboard : null;
-        });
-        if (topDashboard) {
-          return topDashboard;
-        }
-
-        return null;
+        if (typeof Dashboard !== 'undefined' && Dashboard) return Dashboard;
+        return tryGet(function(){ return window.Dashboard; })
+            || tryGet(function(){ return window.parent.Dashboard; })
+            || null;
       }
-
-      function getAccessToken() {
-        var api = getApiClient();
-        if (api && typeof api.accessToken === 'function') {
-          var tok = api.accessToken();
-          if (tok) return tok;
-        }
-        if (api && api._serverInfo && api._serverInfo.AccessToken) return api._serverInfo.AccessToken;
+      function getToken() {
+        var a = getApiClient();
+        if (a && typeof a.accessToken === 'function') { var t = a.accessToken(); if (t) return t; }
+        if (a && a._serverInfo) return a._serverInfo.AccessToken || '';
         return '';
       }
-
-      function appendApiKey(url) {
-        var token = getAccessToken();
-        if (!token || url.indexOf('api_key=') !== -1) return url;
-        return url + (url.indexOf('?') >= 0 ? '&' : '?') + 'api_key=' + encodeURIComponent(token);
+      function getUrl(path) {
+        var a = getApiClient();
+        if (a && typeof a.getUrl === 'function') return a.getUrl(path);
+        return location.origin + path;
       }
-
-      function getPathUrl(path) {
-        var api = getApiClient();
-        if (api && typeof api.getUrl === 'function') return api.getUrl(path);
-        if (globalThis.location && globalThis.location.origin) return globalThis.location.origin + path;
-        return path;
+      function cfgUrl() {
+        var u = '/Plugins/' + encodeURIComponent(pluginId) + '/Configuration';
+        var t = getToken(); return t ? u + '?api_key=' + encodeURIComponent(t) : u;
       }
-
-      function getTunerUrl() {
-        return getPathUrl('/JellyTV/m3u');
-      }
-
-      function configUrl() {
-        var base = '/Plugins/' + encodeURIComponent(pluginId) + '/Configuration';
-        var token = getAccessToken();
-        return token ? base + '?api_key=' + encodeURIComponent(token) : base;
-      }
-
       function getConfig() {
-        var api = getApiClient();
-        if (api && typeof api.getPluginConfiguration === 'function') {
-          return api.getPluginConfiguration(pluginId);
-        }
-        return fetch(configUrl(), { method: 'GET', credentials: 'include' })
-          .then(function (r) {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.json();
-          });
+        var a = getApiClient();
+        if (a && a.getPluginConfiguration) return a.getPluginConfiguration(pluginId);
+        return fetch(cfgUrl(), { method:'GET', credentials:'include' })
+          .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); });
+      }
+      function saveConfig(cfg) {
+        var a = getApiClient();
+        if (a && a.updatePluginConfiguration) return a.updatePluginConfiguration(pluginId, cfg);
+        return fetch(cfgUrl(), {
+          method:'POST', credentials:'include',
+          headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg)
+        }).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r; });
       }
 
-      function saveConfig(config) {
-        var api = getApiClient();
-        if (api && typeof api.updatePluginConfiguration === 'function') {
-          return api.updatePluginConfiguration(pluginId, config);
-        }
-        return fetch(configUrl(), {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(config)
-        }).then(function (r) {
-          if (!r.ok) throw new Error('HTTP ' + r.status);
-          return r;
-        });
+      // ── Tabs ─────────────────────────────────────────────────────────────
+      function switchTab(name) {
+        var p = ensurePage(); if (!p) return;
+        p.querySelectorAll('.jt-tab-btn').forEach(function(b){ b.classList.toggle('active', b.dataset.tab === name); });
+        p.querySelectorAll('.jt-tab-content').forEach(function(c){ c.classList.toggle('active', c.id === 'jt-tab-' + name); });
       }
 
-      function showEditor(isEditMode, index) {
-        var panel = q('sourceEditor');
-        var title = q('sourceEditorTitle');
-        var button = q('btnShowSourceEditor');
-        var nameInput = q('newName');
-        var urlInput = q('newUrl');
+      // ── Helpers ──────────────────────────────────────────────────────────
+      function badge(text, cls) {
+        var s = document.createElement('span');
+        s.className = 'jt-badge ' + (cls || 'jt-badge-gray');
+        s.textContent = text; return s;
+      }
+      function actionBtn(label, cls, handler) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'raised ' + cls + ' emby-button';
+        b.textContent = label;
+        b.onclick = handler; return b;
+      }
 
-        if (!panel || !title || !button || !nameInput || !urlInput) {
-          return;
-        }
-
+      // ── Sources ──────────────────────────────────────────────────────────
+      function showEditor(edit, idx) {
+        var panel = q('sourceEditor'), title = q('sourceEditorTitle'), n = q('newName'), u = q('newUrl');
+        if (!panel) return;
         panel.style.display = 'block';
-
-        if (isEditMode && state.cfg && Array.isArray(state.cfg.Sources) && state.cfg.Sources[index]) {
-          var source = state.cfg.Sources[index];
-          state.editorIndex = index;
-          title.textContent = 'Editar fuente';
-          button.textContent = 'Agregar nueva fuente';
-          nameInput.value = source.Name || '';
-          urlInput.value = source.Url || '';
+        if (edit && state.cfg && state.cfg.Sources && state.cfg.Sources[idx]) {
+          var s = state.cfg.Sources[idx]; state.editorIndex = idx; title.textContent = 'Editar fuente';
+          n.value = s.Name||''; u.value = s.Url||'';
         } else {
-          state.editorIndex = -1;
-          title.textContent = 'Agregar fuente';
-          button.textContent = 'Ocultar editor';
-          nameInput.value = '';
-          urlInput.value = '';
+          state.editorIndex = -1; title.textContent = 'Agregar fuente'; n.value = ''; u.value = '';
         }
-
-        nameInput.focus();
+        n.focus();
       }
+      function hideEditor() { var p = q('sourceEditor'); if(p) p.style.display='none'; state.editorIndex=-1; }
 
-      function hideEditor() {
-        var panel = q('sourceEditor');
-        var button = q('btnShowSourceEditor');
-        if (panel) {
-          panel.style.display = 'none';
-        }
-        if (button) {
-          button.textContent = 'Agregar fuente';
-        }
-        state.editorIndex = -1;
-      }
-
-      function renderSourcesTable() {
-        var body = q('sourcesTableBody');
-        if (!body) {
-          return;
-        }
-
+      function renderSources() {
+        var body = q('sourcesTableBody'); if (!body) return;
         body.innerHTML = '';
-
-        if (!state.cfg || !Array.isArray(state.cfg.Sources) || state.cfg.Sources.length === 0) {
-          var emptyRow = document.createElement('tr');
-          var emptyCell = document.createElement('td');
-          emptyCell.colSpan = 5;
-          emptyCell.className = 'jt-muted';
-          emptyCell.textContent = 'No hay fuentes configuradas.';
-          emptyRow.appendChild(emptyCell);
-          body.appendChild(emptyRow);
-          return;
+        if (!state.cfg || !Array.isArray(state.cfg.Sources) || !state.cfg.Sources.length) {
+          var r = body.insertRow(), c = r.insertCell();
+          c.colSpan = 5; c.style.cssText = 'text-align:center;padding:20px;color:rgba(255,255,255,.35);';
+          c.textContent = 'No hay fuentes configuradas.'; return;
         }
-
-        state.cfg.Sources.forEach(function (source, index) {
-          var row = document.createElement('tr');
-
-          var colName = document.createElement('td');
-          colName.textContent = source.Name || '(sin nombre)';
-          row.appendChild(colName);
-
-          var colUrl = document.createElement('td');
-          var urlSpan = document.createElement('div');
-          urlSpan.className = 'jt-url';
-          urlSpan.textContent = source.Url || '';
-          colUrl.appendChild(urlSpan);
-          row.appendChild(colUrl);
-
-          var colState = document.createElement('td');
-          colState.textContent = source.IsEnabled ? 'Activa' : 'Desactivada';
-          colState.style.color = source.IsEnabled ? '#4caf50' : '#f44336';
-          row.appendChild(colState);
-
-          var colSync = document.createElement('td');
-          if (source.LastError) {
-            colSync.textContent = 'Error';
-            var detail = document.createElement('div');
-            detail.className = 'jt-small';
-            detail.style.color = '#f44336';
-            detail.textContent = source.LastError;
-            colSync.appendChild(detail);
-          } else if (source.LastFetched) {
-            colSync.textContent = new Date(source.LastFetched).toLocaleString();
-            var count = document.createElement('div');
-            count.className = 'jt-small';
-            count.textContent = (source.LastChannelCount || 0) + ' canales';
-            colSync.appendChild(count);
-          } else {
-            colSync.textContent = 'Sin sincronizacion';
-          }
-          row.appendChild(colSync);
-
-          var colActions = document.createElement('td');
-          var actions = document.createElement('div');
-          actions.className = 'jt-actions';
-
-          var editBtn = document.createElement('button');
-          editBtn.type = 'button';
-          editBtn.className = 'raised button-submit emby-button jt-inline-btn jt-primary';
-          editBtn.textContent = 'Editar';
-          editBtn.addEventListener('click', function () {
-            showEditor(true, index);
-          });
-          actions.appendChild(editBtn);
-
-          var toggleBtn = document.createElement('button');
-          toggleBtn.type = 'button';
-          toggleBtn.className = 'emby-button jt-inline-btn ' + (source.IsEnabled ? 'jt-danger' : 'jt-primary');
-          toggleBtn.textContent = source.IsEnabled ? 'Desactivar' : 'Activar';
-          toggleBtn.addEventListener('click', function () {
-            toggleSource(index);
-          });
-          actions.appendChild(toggleBtn);
-
-          var deleteBtn = document.createElement('button');
-          deleteBtn.type = 'button';
-          deleteBtn.className = 'emby-button jt-inline-btn jt-danger';
-          deleteBtn.textContent = 'Eliminar';
-          deleteBtn.addEventListener('click', function () {
-            deleteSource(index);
-          });
-          actions.appendChild(deleteBtn);
-
-          colActions.appendChild(actions);
-          row.appendChild(colActions);
-
-          body.appendChild(row);
+        state.cfg.Sources.forEach(function(src, i) {
+          var row = body.insertRow();
+          row.insertCell().textContent = src.Name || '(sin nombre)';
+          var uc = row.insertCell(); uc.className = 'jt-url'; uc.textContent = src.Url || '';
+          var sc = row.insertCell(); sc.appendChild(badge(src.IsEnabled ? 'Activa' : 'Desactivada', src.IsEnabled ? 'jt-badge-green' : 'jt-badge-red'));
+          var dc = row.insertCell();
+          if (src.LastError) {
+            dc.appendChild(badge('Error', 'jt-badge-red'));
+            var ed = document.createElement('div'); ed.style.cssText='font-size:.76em;color:#ef5350;margin-top:2px;'; ed.textContent=src.LastError; dc.appendChild(ed);
+          } else if (src.LastFetched) {
+            dc.textContent = new Date(src.LastFetched).toLocaleString();
+            var cd = document.createElement('div'); cd.style.cssText='font-size:.76em;color:rgba(255,255,255,.4);'; cd.textContent=(src.LastChannelCount||0)+' canales'; dc.appendChild(cd);
+          } else { dc.style.color='rgba(255,255,255,.3)'; dc.textContent='Sin sincronizar'; }
+          var ac = row.insertCell(), wrap = document.createElement('div'); wrap.className='jt-cell-actions';
+          wrap.appendChild(actionBtn('Editar','button-submit',(function(x){return function(){showEditor(true,x);};})(i)));
+          wrap.appendChild(actionBtn(src.IsEnabled?'Desactivar':'Activar',src.IsEnabled?'button-cancel':'button-submit',(function(x){return function(){toggleSource(x);};})(i)));
+          wrap.appendChild(actionBtn('Eliminar','button-cancel',(function(x){return function(){deleteSource(x);};})(i)));
+          ac.appendChild(wrap);
         });
       }
 
-      function applyConfig(config) {
-        state.cfg = config || {};
-        if (!Array.isArray(state.cfg.Sources)) {
-          state.cfg.Sources = [];
+      function saveSource() {
+        if (!state.cfg) return;
+        var n = q('newName'), u = q('newUrl');
+        var name = n?n.value.trim():'', url = u?u.value.trim():'';
+        if (!name||!url) { setStatus('globalStatus','Nombre y URL son obligatorios.',true); return; }
+        if (!Array.isArray(state.cfg.Sources)) state.cfg.Sources=[];
+        var isEdit = state.editorIndex >= 0;
+        if (isEdit && state.cfg.Sources[state.editorIndex]) {
+          state.cfg.Sources[state.editorIndex].Name=name; state.cfg.Sources[state.editorIndex].Url=url;
+        } else {
+          state.cfg.Sources.push({Id:Date.now().toString(36)+Math.random().toString(36).slice(2),Name:name,Url:url,IsEnabled:true,LastFetched:null,LastChannelCount:0,LastError:null});
         }
-        if (!Array.isArray(state.cfg.Proxies)) {
-          state.cfg.Proxies = [];
-        }
-
-        var tokenRefresh = q('TokenRefreshMarginSeconds');
-        var timeout = q('RequestTimeoutSeconds');
-        var redirects = q('MaxRedirects');
-        var userAgent = q('UserAgent');
-        var autoRegister = q('AutoRegisterTuner');
-        var verbose = q('VerboseLogging');
-
-        if (tokenRefresh) tokenRefresh.value = state.cfg.TokenRefreshMarginSeconds || 30;
-        if (timeout) timeout.value = state.cfg.RequestTimeoutSeconds || 15;
-        if (redirects) redirects.value = state.cfg.MaxRedirects || 10;
-        if (userAgent) userAgent.value = state.cfg.UserAgent || '';
-        if (autoRegister) autoRegister.checked = state.cfg.AutoRegisterTuner !== false;
-        if (verbose) verbose.checked = !!state.cfg.VerboseLogging;
-
-        renderSourcesTable();
-        renderProxiesTable();
+        saveConfig(state.cfg).then(function(){ renderSources(); hideEditor(); var ok=isEdit?'Fuente actualizada.':'Fuente agregada.'; setStatus('globalStatus',ok,false); clearLater('globalStatus',ok,2500); })
+          .catch(function(e){ setStatus('globalStatus','Error: '+e.message,true); });
+      }
+      function deleteSource(i) {
+        if (!state.cfg||!Array.isArray(state.cfg.Sources)) return;
+        if (!confirm('Eliminar esta fuente?')) return;
+        var rem = state.cfg.Sources.splice(i,1);
+        saveConfig(state.cfg).then(function(){ renderSources(); var ok='Fuente eliminada.'; setStatus('globalStatus',ok,false); clearLater('globalStatus',ok,2500); })
+          .catch(function(e){ state.cfg.Sources.splice(i,0,rem[0]); setStatus('globalStatus','Error: '+e.message,true); });
+      }
+      function toggleSource(i) {
+        if (!state.cfg||!state.cfg.Sources||!state.cfg.Sources[i]) return;
+        state.cfg.Sources[i].IsEnabled=!state.cfg.Sources[i].IsEnabled;
+        saveConfig(state.cfg).then(renderSources).catch(function(e){ state.cfg.Sources[i].IsEnabled=!state.cfg.Sources[i].IsEnabled; setStatus('globalStatus','Error: '+e.message,true); });
       }
 
-      function collectConfigFromForm() {
-        if (!state.cfg) {
-          state.cfg = {};
+      // ── Proxies ──────────────────────────────────────────────────────────
+      function showProxyEditor(edit, idx) {
+        var panel=q('proxyEditor'),title=q('proxyEditorTitle'),h=q('proxyHost'),p=q('proxyPort'),u=q('proxyUsername'),pw=q('proxyPassword'),ht=q('proxyUseHttps');
+        if (!panel) return;
+        panel.style.display='block';
+        if (edit&&state.cfg&&state.cfg.Proxies&&state.cfg.Proxies[idx]) {
+          var e=state.cfg.Proxies[idx]; state.proxyEditorIndex=idx; title.textContent='Editar proxy';
+          h.value=e.Host||''; p.value=e.Port||8080;
+          if(u) u.value=e.Username||''; if(pw) pw.value=e.Password||''; if(ht) ht.checked=!!e.UseHttps;
+        } else {
+          state.proxyEditorIndex=-1; title.textContent='Agregar proxy';
+          h.value=''; p.value='8080'; if(u) u.value=''; if(pw) pw.value=''; if(ht) ht.checked=false;
         }
-        if (!Array.isArray(state.cfg.Sources)) {
-          state.cfg.Sources = [];
+        h.focus();
+      }
+      function hideProxyEditor() { var p=q('proxyEditor'); if(p) p.style.display='none'; state.proxyEditorIndex=-1; }
+
+      function renderProxies() {
+        var body=q('proxiesTableBody'); if(!body) return;
+        body.innerHTML='';
+        if (!state.cfg||!Array.isArray(state.cfg.Proxies)||!state.cfg.Proxies.length) {
+          var r=body.insertRow(),c=r.insertCell(); c.colSpan=5; c.style.cssText='text-align:center;padding:20px;color:rgba(255,255,255,.35);';
+          c.textContent='No hay proxies configurados.'; return;
         }
-        if (!Array.isArray(state.cfg.Proxies)) {
-          state.cfg.Proxies = [];
-        }
+        state.cfg.Proxies.forEach(function(px,i) {
+          var row=body.insertRow();
+          var hc=row.insertCell(); hc.className='jt-url'; hc.textContent=px.Host||'';
+          row.insertCell().textContent=px.Port||'';
+          var sch=row.insertCell(); sch.appendChild(badge(px.UseHttps?'HTTPS':'HTTP',px.UseHttps?'jt-badge-green':'jt-badge-gray'));
+          var st=row.insertCell(); st.appendChild(badge(px.IsEnabled?'Activo':'Desactivado',px.IsEnabled?'jt-badge-green':'jt-badge-red'));
+          var ac=row.insertCell(),wrap=document.createElement('div'); wrap.className='jt-cell-actions';
+          wrap.appendChild(actionBtn('Editar','button-submit',(function(x){return function(){showProxyEditor(true,x);};})(i)));
+          wrap.appendChild(actionBtn(px.IsEnabled?'Desactivar':'Activar',px.IsEnabled?'button-cancel':'button-submit',(function(x){return function(){toggleProxy(x);};})(i)));
+          wrap.appendChild(actionBtn('Eliminar','button-cancel',(function(x){return function(){deleteProxy(x);};})(i)));
+          ac.appendChild(wrap);
+        });
+      }
 
-        state.cfg.TokenRefreshMarginSeconds = getInt('TokenRefreshMarginSeconds', 30);
-        state.cfg.RequestTimeoutSeconds = getInt('RequestTimeoutSeconds', 15);
-        state.cfg.MaxRedirects = getInt('MaxRedirects', 10);
+      function saveProxy() {
+        if (!state.cfg) return;
+        var h=q('proxyHost'),p=q('proxyPort'),u=q('proxyUsername'),pw=q('proxyPassword'),ht=q('proxyUseHttps');
+        var host=h?h.value.trim():'',port=p?parseInt(p.value,10):0;
+        if (!host||!port||isNaN(port)) { setStatus('proxyStatus','Host y puerto son obligatorios.',true); return; }
+        if (!Array.isArray(state.cfg.Proxies)) state.cfg.Proxies=[];
+        var isEdit=state.proxyEditorIndex>=0;
+        var entry={Host:host,Port:port,Username:u?u.value.trim():'',Password:pw?pw.value:'',UseHttps:!!(ht&&ht.checked),IsEnabled:true};
+        if (isEdit&&state.cfg.Proxies[state.proxyEditorIndex]) {
+          entry.Id=state.cfg.Proxies[state.proxyEditorIndex].Id; entry.IsEnabled=state.cfg.Proxies[state.proxyEditorIndex].IsEnabled;
+          state.cfg.Proxies[state.proxyEditorIndex]=entry;
+        } else { entry.Id=Date.now().toString(36)+Math.random().toString(36).slice(2); state.cfg.Proxies.push(entry); }
+        saveConfig(state.cfg).then(function(){ renderProxies(); hideProxyEditor(); var ok=isEdit?'Proxy actualizado.':'Proxy agregado.'; setStatus('proxyStatus',ok,false); clearLater('proxyStatus',ok,2500); })
+          .catch(function(e){ setStatus('proxyStatus','Error: '+e.message,true); });
+      }
+      function deleteProxy(i) {
+        if (!state.cfg||!Array.isArray(state.cfg.Proxies)) return;
+        if (!confirm('Eliminar este proxy?')) return;
+        var rem=state.cfg.Proxies.splice(i,1);
+        saveConfig(state.cfg).then(function(){ renderProxies(); var ok='Proxy eliminado.'; setStatus('proxyStatus',ok,false); clearLater('proxyStatus',ok,2500); })
+          .catch(function(e){ state.cfg.Proxies.splice(i,0,rem[0]); setStatus('proxyStatus','Error: '+e.message,true); });
+      }
+      function toggleProxy(i) {
+        if (!state.cfg||!state.cfg.Proxies||!state.cfg.Proxies[i]) return;
+        state.cfg.Proxies[i].IsEnabled=!state.cfg.Proxies[i].IsEnabled;
+        saveConfig(state.cfg).then(renderProxies).catch(function(e){ state.cfg.Proxies[i].IsEnabled=!state.cfg.Proxies[i].IsEnabled; setStatus('proxyStatus','Error: '+e.message,true); });
+      }
 
-        var ua = q('UserAgent');
-        var autoRegister = q('AutoRegisterTuner');
-        var verbose = q('VerboseLogging');
-
-        state.cfg.UserAgent = ua ? ua.value.trim() : '';
-        state.cfg.AutoRegisterTuner = !!(autoRegister && autoRegister.checked);
-        state.cfg.VerboseLogging = !!(verbose && verbose.checked);
-
+      // ── Config ───────────────────────────────────────────────────────────
+      function applyConfig(cfg) {
+        state.cfg = cfg||{};
+        if (!Array.isArray(state.cfg.Sources)) state.cfg.Sources=[];
+        if (!Array.isArray(state.cfg.Proxies)) state.cfg.Proxies=[];
+        var fields={TokenRefreshMarginSeconds:30,RequestTimeoutSeconds:15,MaxRedirects:10,SourceSyncIntervalHours:24,UserAgent:''};
+        Object.keys(fields).forEach(function(k){ var el=q(k); if(el) el.value=state.cfg[k]!==undefined?state.cfg[k]:fields[k]; });
+        var ar=q('AutoRegisterTuner'); if(ar) ar.checked=state.cfg.AutoRegisterTuner!==false;
+        var vl=q('VerboseLogging'); if(vl) vl.checked=!!state.cfg.VerboseLogging;
+        renderSources(); renderProxies();
+      }
+      function collectConfig() {
+        if (!state.cfg) state.cfg={};
+        if (!Array.isArray(state.cfg.Sources)) state.cfg.Sources=[];
+        if (!Array.isArray(state.cfg.Proxies)) state.cfg.Proxies=[];
+        state.cfg.TokenRefreshMarginSeconds=getInt('TokenRefreshMarginSeconds',30);
+        state.cfg.RequestTimeoutSeconds=getInt('RequestTimeoutSeconds',15);
+        state.cfg.MaxRedirects=getInt('MaxRedirects',10);
+        state.cfg.SourceSyncIntervalHours=getInt('SourceSyncIntervalHours',24);
+        var ua=q('UserAgent'); state.cfg.UserAgent=ua?ua.value.trim():'';
+        var ar=q('AutoRegisterTuner'); state.cfg.AutoRegisterTuner=!!(ar&&ar.checked);
+        var vl=q('VerboseLogging'); state.cfg.VerboseLogging=!!(vl&&vl.checked);
         return state.cfg;
       }
-
       function loadConfig() {
         setBusy(true);
-        var dashboard = getDashboard();
-        if (dashboard && typeof dashboard.showLoadingMsg === 'function') {
-          dashboard.showLoadingMsg();
-        }
-
-        getConfig().then(function (config) {
-          applyConfig(config);
-          setStatus('globalStatus', '', false);
-          setStatus('saveStatus', '', false);
-        }).catch(function (error) {
-          var detail = error && error.message ? error.message : String(error);
-          setStatus('globalStatus', 'Error cargando configuracion: ' + detail, true);
-        }).finally(function () {
-          setBusy(false);
-          if (dashboard && typeof dashboard.hideLoadingMsg === 'function') {
-            dashboard.hideLoadingMsg();
-          }
-        });
+        var dash=getDashboard(); if(dash&&dash.showLoadingMsg) dash.showLoadingMsg();
+        getConfig().then(function(cfg){ applyConfig(cfg); })
+          .catch(function(e){ setStatus('globalStatus','Error cargando: '+e.message,true); })
+          .finally(function(){ setBusy(false); if(dash&&dash.hideLoadingMsg) dash.hideLoadingMsg(); });
       }
-
       function saveAll() {
-        if (!state.cfg) {
-          setStatus('saveStatus', 'Config aun no cargada.', true);
-          return;
-        }
-
-        var config = collectConfigFromForm();
-        var dashboard = getDashboard();
-
-        setBusy(true);
-        if (dashboard && typeof dashboard.showLoadingMsg === 'function') {
-          dashboard.showLoadingMsg();
-        }
-
-        saveConfig(config).then(function (result) {
-          if (dashboard && typeof dashboard.processPluginConfigurationUpdateResult === 'function') {
-            dashboard.processPluginConfigurationUpdateResult(result);
-          }
-          var ok = 'Configuracion guardada correctamente.';
-          setStatus('saveStatus', ok, false);
-          clearStatusLater('saveStatus', ok, 2600);
-        }).catch(function (error) {
-          var detail = error && error.message ? error.message : String(error);
-          setStatus('saveStatus', 'Error guardando: ' + detail, true);
-        }).finally(function () {
-          setBusy(false);
-          if (dashboard && typeof dashboard.hideLoadingMsg === 'function') {
-            dashboard.hideLoadingMsg();
-          }
-        });
+        if (!state.cfg) return;
+        var cfg=collectConfig(),dash=getDashboard();
+        setBusy(true); if(dash&&dash.showLoadingMsg) dash.showLoadingMsg();
+        saveConfig(cfg).then(function(res){
+          if(dash&&dash.processPluginConfigurationUpdateResult) dash.processPluginConfigurationUpdateResult(res);
+          var ok='Configuracion guardada.'; setStatus('saveStatus',ok,false); clearLater('saveStatus',ok,2600);
+        }).catch(function(e){ setStatus('saveStatus','Error: '+e.message,true); })
+          .finally(function(){ setBusy(false); if(dash&&dash.hideLoadingMsg) dash.hideLoadingMsg(); });
       }
-
       function syncSources() {
-        var dashboard = getDashboard();
-
-        setBusy(true);
-        if (dashboard && typeof dashboard.showLoadingMsg === 'function') {
-          dashboard.showLoadingMsg();
-        }
-
-        setStatus('globalStatus', 'Sincronizando fuentes...', false);
-
-        fetch(getPathUrl('/JellyTV/m3u?refresh=true'), {
-          method: 'GET',
-          credentials: 'include',
-          cache: 'no-store'
-        }).then(function (response) {
-          if (!response.ok) {
-            throw new Error('HTTP ' + response.status + ' sincronizando fuentes');
-          }
-          return response.text();
-        }).then(function () {
-          return getConfig();
-        }).then(function (config) {
-          applyConfig(config);
-          var ok = 'Sincronizacion completada.';
-          setStatus('globalStatus', ok, false);
-          clearStatusLater('globalStatus', ok, 2500);
-        }).catch(function (error) {
-          var detail = error && error.message ? error.message : String(error);
-          setStatus('globalStatus', 'Error sincronizando: ' + detail, true);
-        }).finally(function () {
-          setBusy(false);
-          if (dashboard && typeof dashboard.hideLoadingMsg === 'function') {
-            dashboard.hideLoadingMsg();
-          }
-        });
+        var dash=getDashboard(); setBusy(true);
+        if(dash&&dash.showLoadingMsg) dash.showLoadingMsg();
+        setStatus('globalStatus','Sincronizando...',false);
+        fetch(getUrl('/JellyTV/m3u?refresh=true'),{method:'GET',credentials:'include',cache:'no-store'})
+          .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.text(); })
+          .then(getConfig).then(function(cfg){ applyConfig(cfg); var ok='Completado.'; setStatus('globalStatus',ok,false); clearLater('globalStatus',ok,2500); })
+          .catch(function(e){ setStatus('globalStatus','Error: '+e.message,true); })
+          .finally(function(){ setBusy(false); if(dash&&dash.hideLoadingMsg) dash.hideLoadingMsg(); });
       }
 
-      function saveSourceFromEditor() {
-        if (!state.cfg) {
-          setStatus('globalStatus', 'Config aun no cargada.', true);
-          return;
-        }
-
-        var wasEditing = state.editorIndex >= 0;
-
-        var nameInput = q('newName');
-        var urlInput = q('newUrl');
-
-        var name = nameInput ? nameInput.value.trim() : '';
-        var url = urlInput ? urlInput.value.trim() : '';
-
-        if (!name || !url) {
-          setStatus('globalStatus', 'Nombre y URL son obligatorios.', true);
-          return;
-        }
-
-        if (!Array.isArray(state.cfg.Sources)) {
-          state.cfg.Sources = [];
-        }
-
-        if (state.editorIndex >= 0 && state.cfg.Sources[state.editorIndex]) {
-          state.cfg.Sources[state.editorIndex].Name = name;
-          state.cfg.Sources[state.editorIndex].Url = url;
-        } else {
-          state.cfg.Sources.push({
-            Id: Date.now().toString(36) + Math.random().toString(36).slice(2),
-            Name: name,
-            Url: url,
-            IsEnabled: true,
-            LastFetched: null,
-            LastChannelCount: 0,
-            LastError: null
-          });
-        }
-
-        saveConfig(state.cfg).then(function () {
-          renderSourcesTable();
-          hideEditor();
-          var ok = wasEditing ? 'Fuente actualizada.' : 'Fuente agregada.';
-          setStatus('globalStatus', ok, false);
-          clearStatusLater('globalStatus', ok, 2500);
-        }).catch(function (error) {
-          var detail = error && error.message ? error.message : String(error);
-          setStatus('globalStatus', 'Error guardando fuente: ' + detail, true);
-        });
-      }
-
-      function deleteSource(index) {
-        if (!state.cfg || !Array.isArray(state.cfg.Sources)) {
-          return;
-        }
-
-        if (!globalThis.confirm('Eliminar esta fuente?')) {
-          return;
-        }
-
-        var removed = state.cfg.Sources.splice(index, 1);
-        saveConfig(state.cfg).then(function () {
-          renderSourcesTable();
-          var ok = 'Fuente eliminada.';
-          setStatus('globalStatus', ok, false);
-          clearStatusLater('globalStatus', ok, 2500);
-        }).catch(function (error) {
-          state.cfg.Sources.splice(index, 0, removed[0]);
-          var detail = error && error.message ? error.message : String(error);
-          setStatus('globalStatus', 'Error eliminando: ' + detail, true);
-        });
-      }
-
-      function toggleSource(index) {
-        if (!state.cfg || !Array.isArray(state.cfg.Sources) || !state.cfg.Sources[index]) {
-          return;
-        }
-
-        state.cfg.Sources[index].IsEnabled = !state.cfg.Sources[index].IsEnabled;
-        saveConfig(state.cfg).then(function () {
-          renderSourcesTable();
-        }).catch(function (error) {
-          state.cfg.Sources[index].IsEnabled = !state.cfg.Sources[index].IsEnabled;
-          var detail = error && error.message ? error.message : String(error);
-          setStatus('globalStatus', 'Error actualizando fuente: ' + detail, true);
-        });
-      }
-
-      // ── Proxy CRUD ─────────────────────────────────────────────────────────
-
-      function renderProxiesTable() {
-        var body = q('proxiesTableBody');
-        if (!body) return;
-        body.innerHTML = '';
-
-        if (!state.cfg || !Array.isArray(state.cfg.Proxies) || state.cfg.Proxies.length === 0) {
-          var emptyRow = document.createElement('tr');
-          var emptyCell = document.createElement('td');
-          emptyCell.colSpan = 4;
-          emptyCell.className = 'jt-muted';
-          emptyCell.textContent = 'No hay proxies configurados.';
-          emptyRow.appendChild(emptyCell);
-          body.appendChild(emptyRow);
-          return;
-        }
-
-        state.cfg.Proxies.forEach(function (proxy, index) {
-          var row = document.createElement('tr');
-
-          var colHost = document.createElement('td');
-          colHost.className = 'jt-url';
-          colHost.textContent = proxy.Host || '';
-          row.appendChild(colHost);
-
-          var colPort = document.createElement('td');
-          colPort.textContent = proxy.Port || '';
-          row.appendChild(colPort);
-
-          var colScheme = document.createElement('td');
-          colScheme.textContent = proxy.UseHttps ? 'HTTPS' : 'HTTP';
-          colScheme.style.color = proxy.UseHttps ? '#4caf50' : '#9fa4a8';
-          row.appendChild(colScheme);
-
-          var colState = document.createElement('td');
-          colState.textContent = proxy.IsEnabled ? 'Activo' : 'Desactivado';
-          colState.style.color = proxy.IsEnabled ? '#4caf50' : '#f44336';
-          row.appendChild(colState);
-
-          var colActions = document.createElement('td');
-          var actions = document.createElement('div');
-          actions.className = 'jt-actions';
-
-          var editBtn = document.createElement('button');
-          editBtn.type = 'button';
-          editBtn.className = 'raised button-submit emby-button jt-inline-btn jt-primary';
-          editBtn.textContent = 'Editar';
-          editBtn.addEventListener('click', function () { showProxyEditor(true, index); });
-          actions.appendChild(editBtn);
-
-          var toggleBtn = document.createElement('button');
-          toggleBtn.type = 'button';
-          toggleBtn.className = 'emby-button jt-inline-btn ' + (proxy.IsEnabled ? 'jt-danger' : 'jt-primary');
-          toggleBtn.textContent = proxy.IsEnabled ? 'Desactivar' : 'Activar';
-          toggleBtn.addEventListener('click', function () { toggleProxy(index); });
-          actions.appendChild(toggleBtn);
-
-          var deleteBtn = document.createElement('button');
-          deleteBtn.type = 'button';
-          deleteBtn.className = 'emby-button jt-inline-btn jt-danger';
-          deleteBtn.textContent = 'Eliminar';
-          deleteBtn.addEventListener('click', function () { deleteProxy(index); });
-          actions.appendChild(deleteBtn);
-
-          colActions.appendChild(actions);
-          row.appendChild(colActions);
-          body.appendChild(row);
-        });
-      }
-
-      function showProxyEditor(isEditMode, index) {
-        var panel = q('proxyEditor');
-        var title = q('proxyEditorTitle');
-        var button = q('btnShowProxyEditor');
-        var hostInput = q('proxyHost');
-        var portInput = q('proxyPort');
-        var userInput = q('proxyUsername');
-        var passInput = q('proxyPassword');
-        var httpsCheck = q('proxyUseHttps');
-
-        if (!panel || !title || !button || !hostInput || !portInput) return;
-
-        panel.style.display = 'block';
-
-        if (isEditMode && state.cfg && Array.isArray(state.cfg.Proxies) && state.cfg.Proxies[index]) {
-          var entry = state.cfg.Proxies[index];
-          state.proxyEditorIndex = index;
-          title.textContent = 'Editar proxy';
-          button.textContent = 'Agregar nuevo proxy';
-          hostInput.value = entry.Host || '';
-          portInput.value = entry.Port || 8080;
-          if (userInput) userInput.value = entry.Username || '';
-          if (passInput) passInput.value = entry.Password || '';
-          if (httpsCheck) httpsCheck.checked = !!entry.UseHttps;
-        } else {
-          state.proxyEditorIndex = -1;
-          title.textContent = 'Agregar proxy';
-          button.textContent = 'Ocultar editor';
-          hostInput.value = '';
-          portInput.value = '8080';
-          if (userInput) userInput.value = '';
-          if (passInput) passInput.value = '';
-          if (httpsCheck) httpsCheck.checked = false;
-        }
-
-        hostInput.focus();
-      }
-
-      function hideProxyEditor() {
-        var panel = q('proxyEditor');
-        var button = q('btnShowProxyEditor');
-        if (panel) panel.style.display = 'none';
-        if (button) button.textContent = 'Agregar proxy';
-        state.proxyEditorIndex = -1;
-      }
-
-      function saveProxyFromEditor() {
-        if (!state.cfg) { setStatus('proxyStatus', 'Config aun no cargada.', true); return; }
-
-        var wasEditing = state.proxyEditorIndex >= 0;
-        var hostInput = q('proxyHost');
-        var portInput = q('proxyPort');
-        var userInput = q('proxyUsername');
-        var passInput = q('proxyPassword');
-
-        var host = hostInput ? hostInput.value.trim() : '';
-        var port = portInput ? Number.parseInt(portInput.value, 10) : 0;
-        var httpsCheck = q('proxyUseHttps');
-
-        if (!host || !port || Number.isNaN(port)) {
-          setStatus('proxyStatus', 'Host y puerto son obligatorios.', true);
-          return;
-        }
-
-        if (!Array.isArray(state.cfg.Proxies)) state.cfg.Proxies = [];
-
-        var entry = {
-          Host: host,
-          Port: port,
-          Username: userInput ? userInput.value.trim() : '',
-          Password: passInput ? passInput.value : '',
-          UseHttps: !!(httpsCheck && httpsCheck.checked),
-          IsEnabled: true
-        };
-
-        if (state.proxyEditorIndex >= 0 && state.cfg.Proxies[state.proxyEditorIndex]) {
-          entry.Id = state.cfg.Proxies[state.proxyEditorIndex].Id;
-          entry.IsEnabled = state.cfg.Proxies[state.proxyEditorIndex].IsEnabled;
-          state.cfg.Proxies[state.proxyEditorIndex] = entry;
-        } else {
-          entry.Id = Date.now().toString(36) + Math.random().toString(36).slice(2);
-          state.cfg.Proxies.push(entry);
-        }
-
-        saveConfig(state.cfg).then(function () {
-          renderProxiesTable();
-          hideProxyEditor();
-          var ok = wasEditing ? 'Proxy actualizado.' : 'Proxy agregado.';
-          setStatus('proxyStatus', ok, false);
-          clearStatusLater('proxyStatus', ok, 2500);
-        }).catch(function (error) {
-          var detail = error && error.message ? error.message : String(error);
-          setStatus('proxyStatus', 'Error guardando proxy: ' + detail, true);
-        });
-      }
-
-      function deleteProxy(index) {
-        if (!state.cfg || !Array.isArray(state.cfg.Proxies)) return;
-        if (!globalThis.confirm('Eliminar este proxy?')) return;
-
-        var removed = state.cfg.Proxies.splice(index, 1);
-        saveConfig(state.cfg).then(function () {
-          renderProxiesTable();
-          var ok = 'Proxy eliminado.';
-          setStatus('proxyStatus', ok, false);
-          clearStatusLater('proxyStatus', ok, 2500);
-        }).catch(function (error) {
-          state.cfg.Proxies.splice(index, 0, removed[0]);
-          var detail = error && error.message ? error.message : String(error);
-          setStatus('proxyStatus', 'Error eliminando: ' + detail, true);
-        });
-      }
-
-      function toggleProxy(index) {
-        if (!state.cfg || !Array.isArray(state.cfg.Proxies) || !state.cfg.Proxies[index]) return;
-        state.cfg.Proxies[index].IsEnabled = !state.cfg.Proxies[index].IsEnabled;
-        saveConfig(state.cfg).then(function () {
-          renderProxiesTable();
-        }).catch(function (error) {
-          state.cfg.Proxies[index].IsEnabled = !state.cfg.Proxies[index].IsEnabled;
-          var detail = error && error.message ? error.message : String(error);
-          setStatus('proxyStatus', 'Error actualizando proxy: ' + detail, true);
-        });
-      }
-
-      function refreshTunerField() {
-        var tuner = q('tunerUrlInput');
-        if (tuner) {
-          tuner.value = getTunerUrl();
-        }
-      }
-
+      // ── Wiring ───────────────────────────────────────────────────────────
       function bindUi() {
-        if (state.wired) {
-          return;
+        if (state.wired) return;
+        var form=q('JellyTVConfigForm'); if(form) form.addEventListener('submit',function(e){e.preventDefault();});
+
+        var p=ensurePage();
+        if (p) p.querySelectorAll('.jt-tab-btn').forEach(function(b){
+          b.addEventListener('click',function(){ switchTab(b.dataset.tab); });
+        });
+
+        function togEditor(btnId,showFn,hideFn,panelId) {
+          var b=q(btnId); if(!b) return;
+          b.addEventListener('click',function(){ var panel=q(panelId); if(panel&&panel.style.display!=='none') hideFn(); else showFn(false,-1); });
         }
+        togEditor('btnShowSourceEditor',showEditor,hideEditor,'sourceEditor');
+        togEditor('btnShowProxyEditor',showProxyEditor,hideProxyEditor,'proxyEditor');
 
-        var form = q('JellyTVConfigForm');
-        var showEditorBtn = q('btnShowSourceEditor');
-        var saveSourceBtn = q('btnSaveSource');
-        var cancelSourceBtn = q('btnCancelSource');
-        var saveAllBtn = q('btnSaveAll');
-        var syncSourcesBtn = q('btnSyncSources');
-        var copyTunerBtn = q('btnCopyTuner');
-        var testM3uBtn = q('btnTestM3u');
-        var openLogsBtn = q('btnOpenLogs');
-
-        if (form) {
-          form.addEventListener('submit', function (event) {
-            event.preventDefault();
-            return false;
+        var el;
+        el=q('btnSaveSource');   if(el) el.addEventListener('click',saveSource);
+        el=q('btnCancelSource'); if(el) el.addEventListener('click',hideEditor);
+        el=q('btnSaveProxy');    if(el) el.addEventListener('click',saveProxy);
+        el=q('btnCancelProxy');  if(el) el.addEventListener('click',hideProxyEditor);
+        el=q('btnSaveAll');      if(el) el.addEventListener('click',saveAll);
+        el=q('btnSyncSources');  if(el) el.addEventListener('click',syncSources);
+        el=q('btnCopyTuner');
+        if(el) el.addEventListener('click',function(){
+          navigator.clipboard.writeText(getUrl('/JellyTV/m3u')).then(function(){
+            var ok='URL copiada.'; setStatus('saveStatus',ok,false); clearLater('saveStatus',ok,2000);
           });
-        }
-
-        if (showEditorBtn) {
-          showEditorBtn.addEventListener('click', function () {
-            var panel = q('sourceEditor');
-            if (panel && panel.style.display !== 'none') {
-              hideEditor();
-            } else {
-              showEditor(false, -1);
-            }
-          });
-        }
-
-        if (saveSourceBtn) {
-          saveSourceBtn.addEventListener('click', saveSourceFromEditor);
-        }
-
-        if (cancelSourceBtn) {
-          cancelSourceBtn.addEventListener('click', hideEditor);
-        }
-
-        if (saveAllBtn) {
-          saveAllBtn.addEventListener('click', saveAll);
-        }
-
-        if (syncSourcesBtn) {
-          syncSourcesBtn.addEventListener('click', syncSources);
-        }
-
-        if (copyTunerBtn) {
-          copyTunerBtn.addEventListener('click', function () {
-            var tuner = getTunerUrl();
-            navigator.clipboard.writeText(tuner).then(function () {
-              var ok = 'URL copiada al portapapeles.';
-              setStatus('globalStatus', ok, false);
-              clearStatusLater('globalStatus', ok, 2200);
-            });
-          });
-        }
-
-        if (testM3uBtn) {
-          testM3uBtn.addEventListener('click', function () {
-            globalThis.open(getTunerUrl(), '_blank');
-          });
-        }
-
-        if (openLogsBtn) {
-          openLogsBtn.addEventListener('click', function () {
-            var logsUrl = getPathUrl('/JellyTV/log?lines=600');
-            globalThis.open(logsUrl, '_blank');
-          });
-        }
-
-        var showProxyEditorBtn = q('btnShowProxyEditor');
-        var saveProxyBtn = q('btnSaveProxy');
-        var cancelProxyBtn = q('btnCancelProxy');
-
-        if (showProxyEditorBtn) {
-          showProxyEditorBtn.addEventListener('click', function () {
-            var panel = q('proxyEditor');
-            if (panel && panel.style.display !== 'none') {
-              hideProxyEditor();
-            } else {
-              showProxyEditor(false, -1);
-            }
-          });
-        }
-
-        if (saveProxyBtn) {
-          saveProxyBtn.addEventListener('click', saveProxyFromEditor);
-        }
-
-        if (cancelProxyBtn) {
-          cancelProxyBtn.addEventListener('click', hideProxyEditor);
-        }
-
-        state.wired = true;
+        });
+        el=q('btnOpenLogs');
+        if(el) el.addEventListener('click',function(){ window.open(getUrl('/JellyTV/log?lines=600'),'_blank'); });
+        state.wired=true;
       }
 
-      function hasDom() {
-        return !!(q('JellyTVConfigForm') && q('sourcesTableBody') && q('proxiesTableBody') && q('btnSaveAll'));
-      }
-
-      function scheduleRetry() {
-        if (state.retryTimer) {
-          return;
-        }
-
-        state.retryTimer = setTimeout(function () {
-          state.retryTimer = null;
-          bootstrap();
-        }, 280);
-      }
+      function hasDom() { return !!(q('JellyTVConfigForm')&&q('sourcesTableBody')&&q('proxiesTableBody')&&q('btnSaveAll')); }
+      function refreshTuner() { var el=q('tunerUrlDisplay'); if(el) el.textContent=getUrl('/JellyTV/m3u'); }
+      function scheduleRetry() { if(state.retryTimer) return; state.retryTimer=setTimeout(function(){state.retryTimer=null;bootstrap();},280); }
 
       function bootstrap(page) {
-        var activePage = ensurePage(page);
-        if (!activePage) {
-          scheduleRetry();
-          return;
-        }
-
-        var now = Date.now();
-        if (state.bootstrapped && (now - state.lastBootstrapAt) < 1200) {
-          return;
-        }
-        state.lastBootstrapAt = now;
-
-        var markupPluginId = activePage.dataset ? activePage.dataset.pluginuniqueid : '';
-        if (markupPluginId) {
-          pluginId = markupPluginId;
-        }
-
-        if (!hasDom()) {
-          scheduleRetry();
-          return;
-        }
-
-        refreshTunerField();
-        bindUi();
-
-        if (!state.bootstrapped) {
-          state.bootstrapped = true;
-        }
-
-        loadConfig();
-
-        globalThis.__JellyTVConfigBootstrapped = true;
+        var ap=ensurePage(page); if(!ap){scheduleRetry();return;}
+        var now=Date.now(); if(state.bootstrapped&&(now-state.lastBootstrapAt)<1200) return;
+        state.lastBootstrapAt=now;
+        var mpid=ap.dataset&&ap.dataset.pluginuniqueid; if(mpid) pluginId=mpid;
+        if(!hasDom()){scheduleRetry();return;}
+        refreshTuner(); bindUi(); state.bootstrapped=true; loadConfig();
       }
-
       function bindPageShow() {
-        var page = ensurePage();
-        if (!page) {
-          scheduleRetry();
-          return;
-        }
-
-        if (page.dataset && page.dataset.jtBound === '1') {
-          return;
-        }
-
-        if (page.dataset) {
-          page.dataset.jtBound = '1';
-        }
-
-        page.addEventListener('pageshow', function (event) {
-          bootstrap(event.currentTarget);
-        });
+        var page=ensurePage(); if(!page){scheduleRetry();return;}
+        if(page.dataset&&page.dataset.jtBound==='1') return;
+        if(page.dataset) page.dataset.jtBound='1';
+        page.addEventListener('pageshow',function(ev){bootstrap(ev.currentTarget);});
       }
 
       bindPageShow();
-
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function () {
-          bindPageShow();
-          bootstrap();
-        });
-      } else {
-        bootstrap();
-      }
-
-      globalThis.addEventListener('hashchange', function () {
-        if (globalThis.location && globalThis.location.hash && globalThis.location.hash.includes('configurationpage?name=JellyTV')) {
-          bindPageShow();
-          bootstrap();
-        }
-      });
+      if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',function(){bindPageShow();bootstrap();});
+      else bootstrap();
+      window.addEventListener('hashchange',function(){ if(location.hash&&location.hash.includes('configurationpage?name=JellyTV')){bindPageShow();bootstrap();} });
     })();
   </script>
+
 </div>
 </body>
 </html>
