@@ -15,6 +15,9 @@ namespace JellyTV.Services;
 /// </summary>
 public class M3uAggregatorService
 {
+    // Hardcoded constant (not configurable to avoid interference with token renewal logic)
+    private const int REQUEST_TIMEOUT_SECONDS = 30;
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<M3uAggregatorService> _logger;
     private readonly SemaphoreSlim _buildLock = new(1, 1);
@@ -30,7 +33,7 @@ public class M3uAggregatorService
 
     /// <summary>
     /// Builds a combined M3U playlist from all enabled sources.
-    /// Each channel URL is rewritten to /JellyTV/stream?url=&lt;base64&gt;
+    /// Each channel URL is rewritten to /JellyTV/stream.m3u8?url=&lt;base64&gt;
     /// so the proxy handles token renewal transparently.
     /// </summary>
     public async Task<string> BuildCombinedM3uAsync(string proxyBaseUrl, CancellationToken ct = default, bool forceRefresh = false)
@@ -66,7 +69,7 @@ public class M3uAggregatorService
 
         var client = _httpClientFactory.CreateClient("JellyTV");
         var totalChannels = 0;
-        var timeoutSeconds = Math.Clamp(config.RequestTimeoutSeconds, 5, 120);
+        var timeoutSeconds = REQUEST_TIMEOUT_SECONDS;
 
         foreach (var source in enabledSources)
         {
@@ -169,6 +172,6 @@ public class M3uAggregatorService
     {
         var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(originalUrl))
             .Replace('+', '-').Replace('/', '_').TrimEnd('=');
-        return $"{proxyBaseUrl}/stream?url={encoded}";
+        return $"{proxyBaseUrl}/stream.m3u8?url={encoded}";
     }
 }

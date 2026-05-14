@@ -130,6 +130,7 @@
       <div class="jt-tab-bar">
         <button class="jt-tab-btn active" type="button" data-tab="sources">Fuentes M3U</button>
         <button class="jt-tab-btn" type="button" data-tab="proxies">Proxies</button>
+        <button class="jt-tab-btn" type="button" data-tab="channels">Canales & Salud</button>
         <button class="jt-tab-btn" type="button" data-tab="settings">Configuracion</button>
       </div>
 
@@ -210,6 +211,27 @@
           <div id="proxyStatus" class="jt-status"></div>
         </div>
 
+        <!-- ══ Canales & Salud ════════════════════════════════════════════ -->
+        <div id="jt-tab-channels" class="jt-tab-content">
+          <div class="fieldDescription">Verifica el estado (vivo/muerto) de los canales en tus fuentes.</div>
+          <div class="jt-toolbar">
+            <button id="btnScanChannels" is="emby-button" type="button" class="raised button-submit emby-button"><span>Escanear ahora</span></button>
+          </div>
+          <div id="channelsStatus" class="jt-status"></div>
+          <div id="channelsLoading" style="display:none;padding:20px;text-align:center;color:rgba(255,255,255,.5);">
+            <p>Escaneando canales...</p>
+            <div style="margin-top:10px;height:3px;background:rgba(0,164,220,.2);border-radius:3px;overflow:hidden;">
+              <div style="height:100%;background:rgba(0,164,220,.6);animation:progress 1.5s ease-in-out infinite;"></div>
+            </div>
+          </div>
+          <div class="jt-tableWrap">
+            <table class="jt-table">
+              <thead><tr><th>Source</th><th>Canal</th><th>Estado</th><th>HTTP</th><th>Bytes</th><th>Tiempo</th><th>Tipo</th><th>Error</th></tr></thead>
+              <tbody id="channelsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
         <!-- ══ Configuracion ════════════════════════════════════════════ -->
         <div id="jt-tab-settings" class="jt-tab-content">
           <div style="margin-bottom:1.5em;">
@@ -223,25 +245,27 @@
           <hr/>
           <div class="jt-grid-2" style="margin-top:1em;">
             <div class="inputContainer">
-              <label class="inputLabel inputLabelUnfocused" for="TokenRefreshMarginSeconds">Margen renovacion token (seg)</label>
-              <input id="TokenRefreshMarginSeconds" is="emby-input" name="TokenRefreshMarginSeconds" type="number" min="5" max="300" class="emby-input"/>
-            </div>
-            <div class="inputContainer">
-              <label class="inputLabel inputLabelUnfocused" for="RequestTimeoutSeconds">Timeout peticiones (seg)</label>
-              <input id="RequestTimeoutSeconds" is="emby-input" name="RequestTimeoutSeconds" type="number" min="5" max="120" class="emby-input"/>
-            </div>
-            <div class="inputContainer">
-              <label class="inputLabel inputLabelUnfocused" for="MaxRedirects">Max redirecciones</label>
-              <input id="MaxRedirects" is="emby-input" name="MaxRedirects" type="number" min="1" max="30" class="emby-input"/>
-            </div>
-            <div class="inputContainer">
               <label class="inputLabel inputLabelUnfocused" for="SourceSyncIntervalHours">Sincronizacion fuentes (horas)</label>
               <input id="SourceSyncIntervalHours" is="emby-input" name="SourceSyncIntervalHours" type="number" min="1" max="168" class="emby-input"/>
+            </div>
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="ChannelHealthCheckIntervalHours">Escaneo de canales (horas)</label>
+              <input id="ChannelHealthCheckIntervalHours" is="emby-input" name="ChannelHealthCheckIntervalHours" type="number" min="1" max="168" class="emby-input"/>
             </div>
           </div>
           <div class="inputContainer" style="max-width:600px;">
             <label class="inputLabel inputLabelUnfocused" for="UserAgent">User-Agent HTTP</label>
             <input id="UserAgent" is="emby-input" name="UserAgent" type="text" class="emby-input"/>
+          </div>
+          <div class="jt-grid-2">
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="PreferredAudioLanguages">Idiomas de audio preferidos</label>
+              <input id="PreferredAudioLanguages" is="emby-input" name="PreferredAudioLanguages" type="text" class="emby-input" placeholder="es,spa,es-419"/>
+            </div>
+            <div class="inputContainer">
+              <label class="inputLabel inputLabelUnfocused" for="PreferredSubtitleLanguages">Idiomas de subtitulos preferidos</label>
+              <input id="PreferredSubtitleLanguages" is="emby-input" name="PreferredSubtitleLanguages" type="text" class="emby-input" placeholder="es,spa"/>
+            </div>
           </div>
           <div class="jt-checks">
             <div class="checkboxContainer">
@@ -295,7 +319,7 @@
       }
       function getInt(id, fb) { var el = q(id); if (!el) return fb; var v = parseInt(el.value, 10); return isNaN(v) ? fb : v; }
       function setBusy(b) {
-        ['btnSaveAll','btnSaveSource','btnShowSourceEditor','btnSyncSources','btnShowProxyEditor','btnSaveProxy'].forEach(function(id) {
+        ['btnSaveAll','btnSaveSource','btnShowSourceEditor','btnSyncSources','btnShowProxyEditor','btnSaveProxy','btnScanChannels'].forEach(function(id) {
           var el = q(id); if (el) el.disabled = !!b;
         });
       }
@@ -347,6 +371,7 @@
         var p = ensurePage(); if (!p) return;
         p.querySelectorAll('.jt-tab-btn').forEach(function(b){ b.classList.toggle('active', b.dataset.tab === name); });
         p.querySelectorAll('.jt-tab-content').forEach(function(c){ c.classList.toggle('active', c.id === 'jt-tab-' + name); });
+        if (name === 'channels') loadChannels();
       }
 
       // ── Helpers ──────────────────────────────────────────────────────────
@@ -506,7 +531,7 @@
         state.cfg = cfg||{};
         if (!Array.isArray(state.cfg.Sources)) state.cfg.Sources=[];
         if (!Array.isArray(state.cfg.Proxies)) state.cfg.Proxies=[];
-        var fields={TokenRefreshMarginSeconds:30,RequestTimeoutSeconds:15,MaxRedirects:10,SourceSyncIntervalHours:24,UserAgent:''};
+        var fields={SourceSyncIntervalHours:24,ChannelHealthCheckIntervalHours:24,UserAgent:'',PreferredAudioLanguages:'es,spa,es-419',PreferredSubtitleLanguages:'es,spa'};
         Object.keys(fields).forEach(function(k){ var el=q(k); if(el) el.value=state.cfg[k]!==undefined?state.cfg[k]:fields[k]; });
         var ar=q('AutoRegisterTuner'); if(ar) ar.checked=state.cfg.AutoRegisterTuner!==false;
         var vl=q('VerboseLogging'); if(vl) vl.checked=!!state.cfg.VerboseLogging;
@@ -516,11 +541,11 @@
         if (!state.cfg) state.cfg={};
         if (!Array.isArray(state.cfg.Sources)) state.cfg.Sources=[];
         if (!Array.isArray(state.cfg.Proxies)) state.cfg.Proxies=[];
-        state.cfg.TokenRefreshMarginSeconds=getInt('TokenRefreshMarginSeconds',30);
-        state.cfg.RequestTimeoutSeconds=getInt('RequestTimeoutSeconds',15);
-        state.cfg.MaxRedirects=getInt('MaxRedirects',10);
         state.cfg.SourceSyncIntervalHours=getInt('SourceSyncIntervalHours',24);
+        state.cfg.ChannelHealthCheckIntervalHours=getInt('ChannelHealthCheckIntervalHours',24);
         var ua=q('UserAgent'); state.cfg.UserAgent=ua?ua.value.trim():'';
+        var pal=q('PreferredAudioLanguages'); state.cfg.PreferredAudioLanguages=pal?pal.value.trim():'es,spa,es-419';
+        var psl=q('PreferredSubtitleLanguages'); state.cfg.PreferredSubtitleLanguages=psl?psl.value.trim():'es,spa';
         var ar=q('AutoRegisterTuner'); state.cfg.AutoRegisterTuner=!!(ar&&ar.checked);
         var vl=q('VerboseLogging'); state.cfg.VerboseLogging=!!(vl&&vl.checked);
         return state.cfg;
@@ -577,6 +602,7 @@
         el=q('btnCancelProxy');  if(el) el.addEventListener('click',hideProxyEditor);
         el=q('btnSaveAll');      if(el) el.addEventListener('click',saveAll);
         el=q('btnSyncSources');  if(el) el.addEventListener('click',syncSources);
+        el=q('btnScanChannels'); if(el) el.addEventListener('click',scanChannels);
         el=q('btnCopyTuner');
         if(el) el.addEventListener('click',function(){
           navigator.clipboard.writeText(getUrl('/JellyTV/m3u')).then(function(){
@@ -588,7 +614,7 @@
         state.wired=true;
       }
 
-      function hasDom() { return !!(q('JellyTVConfigForm')&&q('sourcesTableBody')&&q('proxiesTableBody')&&q('btnSaveAll')); }
+      function hasDom() { return !!(q('JellyTVConfigForm')&&q('sourcesTableBody')&&q('proxiesTableBody')&&q('channelsTableBody')&&q('btnSaveAll')); }
       function refreshTuner() { var el=q('tunerUrlDisplay'); if(el) el.textContent=getUrl('/JellyTV/m3u'); }
       function scheduleRetry() { if(state.retryTimer) return; state.retryTimer=setTimeout(function(){state.retryTimer=null;bootstrap();},280); }
 
@@ -606,6 +632,63 @@
         if(page.dataset) page.dataset.jtBound='1';
         page.addEventListener('pageshow',function(ev){bootstrap(ev.currentTarget);});
       }
+            // ── Channels & Health ────────────────────────────────────────────────────
+            function loadChannels() {
+              setBusy(true); var loading=q('channelsLoading'); if(loading) loading.style.display='block';
+              var url=getUrl('/JellyTV/channels');
+              fetch(url, {method:'GET', credentials:'include'}).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+                .then(function(data){
+                  renderChannelsTable(data);
+                  setStatus('channelsStatus','Canales: '+(data.channelCount||0)+' | Vivos: '+(data.aliveCount||0)+' | Muertos: '+(data.deadCount||0),false);
+                  if(loading) loading.style.display='none';
+                }).catch(function(e){
+                  setStatus('channelsStatus','Error: '+e.message,true);
+                  if(loading) loading.style.display='none';
+                }).finally(function(){ setBusy(false); });
+            }
+
+            function renderChannelsTable(data) {
+              var tbody=q('channelsTableBody'); if(!tbody) return;
+              tbody.innerHTML='';
+              if(!data.channels||!data.channels.length) {
+                var row=tbody.insertRow();
+                var cell=row.insertCell(); cell.colSpan=8; cell.style.cssText='text-align:center;padding:20px;color:rgba(255,255,255,.35);';
+                cell.textContent='Sin canales';
+                return;
+              }
+
+              data.channels.forEach(function(ch){
+                var tr=tbody.insertRow();
+                tr.insertCell().textContent=ch.sourceName||'-';
+                tr.insertCell().textContent=ch.name||'(sin nombre)';
+                var status=ch.status||'unknown';
+                var sc=tr.insertCell();
+                sc.appendChild(badge(
+                  status==='alive'?'VIVO':(status==='dead'?'MUERTO':'SIN ESCANEAR'),
+                  status==='alive'?'jt-badge-green':(status==='dead'?'jt-badge-red':'jt-badge-gray')
+                ));
+                tr.insertCell().textContent=ch.httpStatus||'-';
+                tr.insertCell().textContent=ch.bytesDownloaded?Math.round(ch.bytesDownloaded/1024)+'KB':'-';
+                tr.insertCell().textContent=(ch.durationMs||0)+'ms';
+                tr.insertCell().textContent=ch.streamType||'-';
+                var ec=tr.insertCell(); ec.style.fontSize='.75em'; ec.textContent=ch.errorMessage||'-'; ec.style.color=ch.errorMessage?'#ef5350':'rgba(255,255,255,.3)';
+              });
+            }
+
+            function scanChannels() {
+              setBusy(true); var loading=q('channelsLoading'); if(loading) loading.style.display='block';
+              var url=getUrl('/JellyTV/health-check');
+              setStatus('channelsStatus','Iniciando escaneo...',false);
+              fetch(url, {method:'POST', credentials:'include'}).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+                .then(function(data){
+                  setStatus('channelsStatus','Escaneo iniciado. Esto puede tomar unos minutos...',false);
+                  setTimeout(function(){ loadChannels(); },3000);
+                }).catch(function(e){
+                  setStatus('channelsStatus','Error: '+e.message,true);
+                  if(loading) loading.style.display='none';
+                  setBusy(false);
+                });
+            }
 
       bindPageShow();
       if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',function(){bindPageShow();bootstrap();});

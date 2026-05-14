@@ -17,6 +17,7 @@ namespace JellyTV.Services;
 public class SessionManagerService : BackgroundService
 {
     private readonly ConcurrentDictionary<string, StreamSession> _sessions = new();
+    private readonly ConcurrentDictionary<string, StreamSession> _sessionsById = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _resolveFailures = new();
     private readonly RedirectResolverService _resolver;
     private readonly ILogger<SessionManagerService> _logger;
@@ -47,16 +48,6 @@ public class SessionManagerService : BackgroundService
         // Use URL as key so the same channel reuses its session
         var key = upstreamUrl;
 
-        // Reject immediately if the upstream recently failed (non-auth) to avoid spamming the provider.
-        if (_resolveFailures.TryGetValue(key, out var failedAt) &&
-            DateTimeOffset.UtcNow - failedAt < ResolveFailureBackoff)
-        {
-            var remaining = (int)(ResolveFailureBackoff - (DateTimeOffset.UtcNow - failedAt)).TotalSeconds;
-            _logger.LogWarning("[JellyTV] Upstream {Url} in failure backoff ({Sec}s remaining), skipping resolve", upstreamUrl, remaining);
-            throw new HttpRequestException($"Upstream recently failed — backoff {remaining}s remaining.",
-                null, System.Net.HttpStatusCode.BadGateway);
-        }
-
         if (_sessions.TryGetValue(key, out var existing))
         {
             // Validate the cached session's UpstreamUrl matches the requested key.
@@ -67,6 +58,7 @@ public class SessionManagerService : BackgroundService
                 _logger.LogWarning("[JellyTV] Evicting corrupted session {Id} (UpstreamUrl={Bad} != key={Key})",
                     existing.SessionId, existing.UpstreamUrl, key);
                 _sessions.TryRemove(key, out _);
+                _sessionsById.TryRemove(existing.SessionId, out _);
             }
             else
             {
@@ -74,6 +66,16 @@ public class SessionManagerService : BackgroundService
                 _logger.LogDebug("[JellyTV] Reusing session {Id} for {Url}", existing.SessionId, upstreamUrl);
                 return existing;
             }
+        }
+
+        // Reject immediately if the upstream recently failed (non-auth) to avoid spamming the provider.
+        if (_resolveFailures.TryGetValue(key, out var failedAt) &&
+            DateTimeOffset.UtcNow - failedAt < ResolveFailureBackoff)
+        {
+            var remaining = (int)(ResolveFailureBackoff - (DateTimeOffset.UtcNow - failedAt)).TotalSeconds;
+            _logger.LogWarning("[JellyTV] Upstream {Url} in failure backoff ({Sec}s remaining), skipping resolve", upstreamUrl, remaining);
+            throw new HttpRequestException($"Upstream recently failed — backoff {remaining}s remaining.",
+                null, System.Net.HttpStatusCode.BadGateway);
         }
 
         var session = new StreamSession { UpstreamUrl = upstreamUrl };
@@ -92,6 +94,7 @@ public class SessionManagerService : BackgroundService
         }
 
         _sessions[key] = session;
+        _sessionsById[session.SessionId] = session;
         _logger.LogInformation("[JellyTV] Created session {Id} for {Url}", session.SessionId, upstreamUrl);
         return session;
     }
@@ -106,14 +109,12 @@ public class SessionManagerService : BackgroundService
     /// </summary>
     public StreamSession? GetSessionById(string sessionId)
     {
-        foreach (var session in _sessions.Values)
+        if (_sessionsById.TryGetValue(sessionId, out var session))
         {
-            if (session.SessionId == sessionId)
-            {
-                session.LastAccessedAt = DateTimeOffset.UtcNow;
-                return session;
-            }
+            session.LastAccessedAt = DateTimeOffset.UtcNow;
+            return session;
         }
+
         return null;
     }
 
@@ -144,8 +145,16 @@ public class SessionManagerService : BackgroundService
         session.IsRenewing = true;
         try
         {
-            _logger.LogInformation("[JellyTV] Renewing token for session {Id} upstream={Url}",
-                session.SessionId, session.UpstreamUrl);
+            if (Plugin.Instance?.Configuration.VerboseLogging == true)
+            {
+                _logger.LogInformation("[JellyTV] Renewing token for session {Id} upstream={Url}",
+                    session.SessionId, session.UpstreamUrl);
+            }
+            else
+            {
+                _logger.LogDebug("[JellyTV] Renewing token for session {Id} upstream={Url}",
+                    session.SessionId, session.UpstreamUrl);
+            }
 
             HttpRequestException? lastAuthException = null;
             Exception? lastException = null;
@@ -158,8 +167,16 @@ public class SessionManagerService : BackgroundService
                     session.LastResolved = resolved;
 
                     _resolveFailures.TryRemove(session.UpstreamUrl, out _);
-                    _logger.LogInformation("[JellyTV] Token renewed for session {Id}. Seed={Seed} Final={Url}",
-                        session.SessionId, candidate, resolved.FinalUrl);
+                    if (Plugin.Instance?.Configuration.VerboseLogging == true)
+                    {
+                        _logger.LogInformation("[JellyTV] Token renewed for session {Id}. Seed={Seed} Final={Url}",
+                            session.SessionId, candidate, resolved.FinalUrl);
+                    }
+                    else
+                    {
+                        _logger.LogDebug("[JellyTV] Token renewed for session {Id}. Seed={Seed} Final={Url}",
+                            session.SessionId, candidate, resolved.FinalUrl);
+                    }
                     return;
                 }
                 catch (HttpRequestException ex) when ((int?)ex.StatusCode is 401 or 403)
@@ -261,25 +278,24 @@ public class SessionManagerService : BackgroundService
     }
 
     /// <summary>
-    /// Checks whether the session's token needs renewal based on configured margin.
+    /// Checks whether the session needs proactive renewal.
+    /// Tokenized HLS renewal is handled by window logic in /stream and reactive 401/403 retries.
     /// </summary>
     public bool NeedsRenewal(StreamSession session)
     {
         var resolved = session.LastResolved;
         if (resolved is null) return true;
 
-        var marginSeconds = Plugin.Instance?.Configuration.TokenRefreshMarginSeconds ?? 30;
-        // For short-lived rotating HLS tokens, a large margin causes aggressive early renewals.
-        // Cap the proactive margin unless the user explicitly lowers it in config.
-        if (!string.IsNullOrWhiteSpace(resolved.TokenValue) && marginSeconds > 12)
+        // Tokenized URLs are renewed by the dynamic HLS window strategy in controller logic.
+        if (!string.IsNullOrWhiteSpace(resolved.TokenValue))
         {
-            marginSeconds = 12;
+            return false;
         }
 
         // If we have an explicit expiry, use it
         if (resolved.TokenExpiry.HasValue)
         {
-            return DateTimeOffset.UtcNow >= resolved.TokenExpiry.Value - TimeSpan.FromSeconds(marginSeconds);
+            return DateTimeOffset.UtcNow >= resolved.TokenExpiry.Value;
         }
 
         // No expiry metadata:
@@ -315,6 +331,7 @@ public class SessionManagerService : BackgroundService
             if (now - session.LastAccessedAt > SessionTimeout)
             {
                 _sessions.TryRemove(kvp.Key, out _);
+                _sessionsById.TryRemove(session.SessionId, out _);
                 _logger.LogInformation("[JellyTV] Cleaned up idle session {Id}", session.SessionId);
             }
 

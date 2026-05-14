@@ -32,7 +32,7 @@ public sealed class ProxyPoolService
     }
 
     /// <summary>
-    /// Returns the key and client pair for the next healthy proxy,
+    /// Returns the key and client pair for the next healthy proxy in strict round-robin order,
     /// or (null, null, null) when no proxies are available or all are in cooldown.
     /// </summary>
     public (string? ProxyKey, HttpClient? NoRedirect, HttpClient? AutoRedirect) GetNextProxy()
@@ -75,6 +75,14 @@ public sealed class ProxyPoolService
     /// </summary>
     public HttpClient? GetSegmentClient()
     {
+        return GetNextSegmentProxy().AutoRedirect;
+    }
+
+    /// <summary>
+    /// Returns the next healthy proxy key and auto-redirect client, or null when none are available.
+    /// </summary>
+    public (string? ProxyKey, HttpClient? AutoRedirect) GetNextSegmentProxy()
+    {
         var config = Plugin.Instance?.Configuration;
         var now    = DateTimeOffset.UtcNow;
 
@@ -87,7 +95,7 @@ public sealed class ProxyPoolService
             })
             .ToList();
 
-        if (available is null || available.Count == 0) return null;
+        if (available is null || available.Count == 0) return (null, null);
 
         ProxyEntry selected;
         lock (_indexLock)
@@ -98,7 +106,7 @@ public sealed class ProxyPoolService
 
         var key  = $"{selected.Host}:{selected.Port}";
         var pair = _pool.GetOrAdd(key, _ => BuildPair(selected));
-        return pair.AutoRedirect;
+        return (key, pair.AutoRedirect);
     }
 
     /// <summary>

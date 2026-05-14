@@ -13,6 +13,10 @@ namespace JellyTV.Services;
 /// </summary>
 public class RedirectResolverService
 {
+    // Hardcoded constants (not configurable to avoid interference with token renewal logic)
+    private const int MAX_REDIRECTS = 20;
+    private const int REQUEST_TIMEOUT_SECONDS = 30;
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<RedirectResolverService> _logger;
     private readonly ProxyPoolService _proxyPool;
@@ -36,10 +40,11 @@ public class RedirectResolverService
     /// <param name="originalUrl">The initial IPTV URL.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A <see cref="ResolvedStream"/> containing the final URL and metadata.</returns>
-    public async Task<ResolvedStream> ResolveAsync(string originalUrl, CancellationToken cancellationToken = default)
+    public async Task<ResolvedStream> ResolveAsync(
+        string originalUrl,
+        CancellationToken cancellationToken = default)
     {
-        var config = Plugin.Instance?.Configuration;
-        var maxRedirects = config?.MaxRedirects ?? 10;
+        var maxRedirects = MAX_REDIRECTS;
 
         // Select one proxy for this entire resolve call (both auto and manual paths share it).
         // proxyKey is non-null only when a healthy proxy was selected.
@@ -51,6 +56,7 @@ public class RedirectResolverService
         var autoResolved = await TryResolveWithAutoRedirectAsync(originalUrl, proxyAutoRedirect, cancellationToken).ConfigureAwait(false);
         if (autoResolved is not null)
         {
+            autoResolved.ResolverProxyKey = proxyKey;
             return autoResolved;
         }
 
@@ -68,7 +74,14 @@ public class RedirectResolverService
         string? initialPlaylistContent = null;
         string? rotationNodeUrl = null;
 
-        _logger.LogInformation("[JellyTV] Starting resolution for: {Url}", originalUrl);
+        if (Plugin.Instance?.Configuration.VerboseLogging == true)
+        {
+            _logger.LogInformation("[JellyTV] Starting resolution for: {Url}", originalUrl);
+        }
+        else
+        {
+            _logger.LogDebug("[JellyTV] Starting resolution for: {Url}", originalUrl);
+        }
 
         while (redirectCount <= maxRedirects)
         {
@@ -131,6 +144,23 @@ public class RedirectResolverService
 
             if (!response.IsSuccessStatusCode)
             {
+                // Some providers return 401/403 for specific proxy egress IPs on intermediate hops
+                // (e.g., api/alfa) even when the direct host path is valid. Retry this same hop once
+                // without proxy before failing the whole chain.
+                if (((int)response.StatusCode == 401 || (int)response.StatusCode == 403) && client != directClient)
+                {
+                    PluginLog.Warn($"[RESOLVE] HTTP {(int)response.StatusCode} at {currentUrl} via proxy; retrying direct");
+                    if (!proxyMarkedFailed && proxyKey is not null)
+                    {
+                        proxyMarkedFailed = true;
+                        _proxyPool.MarkFailed(proxyKey);
+                    }
+
+                    response.Dispose();
+                    client = directClient;
+                    continue;
+                }
+
                 _logger.LogWarning("[JellyTV] Non-success HTTP {Status} while resolving {Url}", (int)response.StatusCode, currentUrl);
                 PluginLog.Warn($"[RESOLVE] Non-success HTTP {(int)response.StatusCode} while resolving {currentUrl}");
                 // Throw an HttpRequestException that preserves the status code for callers to handle
@@ -193,10 +223,20 @@ public class RedirectResolverService
         // Attach the redirect chain for diagnostics/history
         resolved.RedirectChain = redirectChain;
         resolved.RotationNodeUrl = rotationNodeUrl;
+        resolved.ResolverProxyKey = proxyKey;
 
-        _logger.LogInformation(
-            "[JellyTV] Resolved to: {FinalUrl} | HLS={IsHls} | TokenExpiry={Expiry} | TokenPresent={TokenPresent}",
-            currentUrl, isHls, tokenExpiry?.ToString("o") ?? "unknown", !string.IsNullOrEmpty(tokenValue));
+        if (Plugin.Instance?.Configuration.VerboseLogging == true)
+        {
+            _logger.LogInformation(
+                "[JellyTV] Resolved to: {FinalUrl} | HLS={IsHls} | TokenExpiry={Expiry} | TokenPresent={TokenPresent}",
+                currentUrl, isHls, tokenExpiry?.ToString("o") ?? "unknown", !string.IsNullOrEmpty(tokenValue));
+        }
+        else
+        {
+            _logger.LogDebug(
+                "[JellyTV] Resolved to: {FinalUrl} | HLS={IsHls} | TokenExpiry={Expiry} | TokenPresent={TokenPresent}",
+                currentUrl, isHls, tokenExpiry?.ToString("o") ?? "unknown", !string.IsNullOrEmpty(tokenValue));
+        }
 
         // Write redirect chain to plugin log for diagnostics
         try
@@ -273,6 +313,7 @@ public class RedirectResolverService
                 ResolvedAt = DateTimeOffset.UtcNow,
                 RedirectChain = redirectChain,
                 InitialPlaylistContent = initialPlaylistContent,
+                ResolverProxyKey = null,
             };
 
             PluginLog.Info($"[RESOLVE-AUTO] Final: {finalUrl} | HLS={resolved.IsHls} | TokenPresent={!string.IsNullOrEmpty(resolved.TokenValue)}");

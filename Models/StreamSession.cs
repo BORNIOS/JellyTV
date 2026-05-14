@@ -77,6 +77,11 @@ public class ResolvedStream
     /// Diagnostics only — renewal must always start from <see cref="OriginalUrl"/>.
     /// </summary>
     public string? RotationNodeUrl { get; set; }
+
+    /// <summary>
+    /// Proxy key used for the successful resolve chain (Host:Port), when resolution used proxy.
+    /// </summary>
+    public string? ResolverProxyKey { get; set; }
 }
 
 /// <summary>
@@ -127,6 +132,16 @@ public class StreamSession
     public DateTimeOffset? LastPlaylistFetchedAt { get; set; }
 
     /// <summary>
+    /// Estimated HLS media-window duration (sum of EXTINF) for the last fetched media playlist.
+    /// </summary>
+    public double? LastPlaylistWindowSeconds { get; set; }
+
+    /// <summary>
+    /// EXT-X-TARGETDURATION (seconds) observed in the last fetched media playlist.
+    /// </summary>
+    public double? LastPlaylistTargetDurationSeconds { get; set; }
+
+    /// <summary>
     /// History of recent resolved streams (keeps last resolutions). Entries older than the configured retention
     /// period should be pruned by the manager; stored here for quick access and diagnostics.
     /// </summary>
@@ -141,6 +156,16 @@ public class StreamSession
     /// Gets or sets when this session was last accessed.
     /// </summary>
     public DateTimeOffset LastAccessedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// Gets or sets when a segment was successfully served for this session.
+    /// </summary>
+    public DateTimeOffset? LastSegmentServedAt { get; set; }
+
+    /// <summary>
+    /// Gets or sets when a forced token renewal was last triggered from /stream.
+    /// </summary>
+    public DateTimeOffset? LastForcedRenewalAt { get; set; }
 
     /// <summary>
     /// Gets or sets whether a token renewal is currently in progress.

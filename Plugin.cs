@@ -25,10 +25,11 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public HlsRewriterService HlsRewriter { get; }
     public SessionManagerService SessionManager { get; }
     public M3uAggregatorService M3uAggregator { get; }
-    public BroadcastService Broadcast { get; }
+    public ChannelHealthCheckService ChannelHealthCheck { get; }
 
-    // Jellyfin Live TV manager — may still be useful for service calls
-    private readonly ILiveTvManager _liveTvManager;
+    // Exposed for scheduled tasks
+    public IHttpClientFactory HttpClientFactory { get; }
+
     // Jellyfin tuner host manager -- used to auto-register the proxy tuner host
     private readonly ITunerHostManager _tunerHostManager;
 
@@ -54,7 +55,6 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         IXmlSerializer xmlSerializer,
         IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory,
-        ILiveTvManager liveTvManager,
         ITunerHostManager tunerHostManager)
         : base(applicationPaths, xmlSerializer)
     {
@@ -72,8 +72,8 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         }
 
         Instance = this;
-        _liveTvManager = liveTvManager;
         _tunerHostManager = tunerHostManager;
+        HttpClientFactory = httpClientFactory;
 
         try
         {
@@ -83,10 +83,10 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
             var proxyPool = new ProxyPoolService(Configuration?.UserAgent ?? "JellyTV/1.0");
             RedirectResolver = new RedirectResolverService(localFactory, loggerFactory.CreateLogger<RedirectResolverService>(), proxyPool);
-            HlsRewriter      = new HlsRewriterService(localFactory,      loggerFactory.CreateLogger<HlsRewriterService>());
+            HlsRewriter      = new HlsRewriterService(localFactory, proxyPool, loggerFactory.CreateLogger<HlsRewriterService>());
             SessionManager   = new SessionManagerService(RedirectResolver, loggerFactory.CreateLogger<SessionManagerService>());
             M3uAggregator    = new M3uAggregatorService(localFactory,     loggerFactory.CreateLogger<M3uAggregatorService>());
-            Broadcast        = new BroadcastService(localFactory, proxyPool, RedirectResolver);
+            ChannelHealthCheck = new ChannelHealthCheckService(localFactory, loggerFactory.CreateLogger<ChannelHealthCheckService>(), SessionManager, applicationPaths);
 
             SessionManager.StartAsync(default).GetAwaiter().GetResult();
             PluginLog.Info("All services started OK");
