@@ -33,4 +33,28 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>How often (in hours) the source sync task re-fetches all M3U sources.</summary>
     public int SourceSyncIntervalHours { get; set; } = 24;
     /// <summary>How often (in hours) the channel health check task validates all channels.</summary>
-    public int ChannelHealthCheckIntervalHours { get; set; } = 24;}
+    public int ChannelHealthCheckIntervalHours { get; set; } = 24;
+
+    // ── Worker integration ────────────────────────────────────────────────
+    /// <summary>Base URL of the JellyTV Cloudflare Worker (e.g. https://jellytv.hmovies.tv).</summary>
+    public string WorkerBaseUrl { get; set; } = string.Empty;
+    /// <summary>API key sent as x-api-key to authenticate health reports to the Worker.</summary>
+    public string WorkerApiKey { get; set; } = string.Empty;
+
+    // ── TMDB enrichment ────────────────────────────────────────────────────
+    /// <summary>TMDB API v4 Bearer token used by the Plugin to enrich EPG titles.</summary>
+    public string TmdbApiKey { get; set; } = string.Empty;
+
+    /// <summary>Maximum parallel workers for TMDB enrichment pipeline.</summary>
+    public int TmdbMaxConcurrency { get; set; } = 6;
+
+    /// <summary>Minutes to suppress retries for titles with no confident TMDB match.</summary>
+    public int TmdbNoMatchTtlMinutes { get; set; } = 180;
+
+    // ── EPG / XMLTV filter ─────────────────────────────────────────────────
+    /// <summary>
+    /// XMLTV sources that the Plugin will download, filter to matching tvg-ids,
+    /// and push to the Worker. Keeps Worker CPU/storage usage minimal.
+    /// </summary>
+    public List<EpgSource> EpgSources { get; set; } = new();
+}

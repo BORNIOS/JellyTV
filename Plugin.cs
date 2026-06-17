@@ -26,6 +26,9 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public SessionManagerService SessionManager { get; }
     public M3uAggregatorService M3uAggregator { get; }
     public ChannelHealthCheckService ChannelHealthCheck { get; }
+    public WorkerReporterService WorkerReporter { get; }
+    public EpgFilterService EpgFilter { get; }
+    public TmdbEnrichmentService TmdbEnrichment { get; }
 
     // Exposed for scheduled tasks
     public IHttpClientFactory HttpClientFactory { get; }
@@ -87,6 +90,9 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             SessionManager   = new SessionManagerService(RedirectResolver, loggerFactory.CreateLogger<SessionManagerService>());
             M3uAggregator    = new M3uAggregatorService(localFactory,     loggerFactory.CreateLogger<M3uAggregatorService>());
             ChannelHealthCheck = new ChannelHealthCheckService(localFactory, loggerFactory.CreateLogger<ChannelHealthCheckService>(), SessionManager, applicationPaths);
+            WorkerReporter    = new WorkerReporterService(localFactory, loggerFactory.CreateLogger<WorkerReporterService>());
+            EpgFilter         = new EpgFilterService(localFactory, loggerFactory.CreateLogger<EpgFilterService>());
+            TmdbEnrichment    = new TmdbEnrichmentService(localFactory, loggerFactory.CreateLogger<TmdbEnrichmentService>());
 
             SessionManager.StartAsync(default).GetAwaiter().GetResult();
             PluginLog.Info("All services started OK");

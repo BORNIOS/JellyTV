@@ -130,7 +130,8 @@
       <div class="jt-tab-bar">
         <button class="jt-tab-btn active" type="button" data-tab="sources">Fuentes M3U</button>
         <button class="jt-tab-btn" type="button" data-tab="proxies">Proxies</button>
-        <button class="jt-tab-btn" type="button" data-tab="channels">Canales & Salud</button>
+        <button class="jt-tab-btn" type="button" data-tab="channels">Canales &amp; Salud</button>
+        <button class="jt-tab-btn" type="button" data-tab="epg">EPG / Guia</button>
         <button class="jt-tab-btn" type="button" data-tab="settings">Configuracion</button>
       </div>
 
@@ -214,6 +215,38 @@
         <!-- ══ Canales & Salud ════════════════════════════════════════════ -->
         <div id="jt-tab-channels" class="jt-tab-content">
           <div class="fieldDescription">Verifica el estado (vivo/muerto) de los canales en tus fuentes.</div>
+          <div class="jt-panel" style="margin-bottom:1.25em;">
+            <h4>Integracion con Worker (failover automatico)</h4>
+            <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+              <div class="inputContainer" style="flex:2;min-width:180px;">
+                <label class="inputLabel inputLabelUnfocused" for="WorkerBaseUrl">URL base del Worker</label>
+                <input id="WorkerBaseUrl" is="emby-input" name="WorkerBaseUrl" type="text" class="emby-input" placeholder="https://jellytv.hmovies.tv"/>
+              </div>
+              <div class="inputContainer" style="flex:2;min-width:180px;">
+                <label class="inputLabel inputLabelUnfocused" for="WorkerApiKey">API Key del Worker</label>
+                <input id="WorkerApiKey" is="emby-input" name="WorkerApiKey" type="password" class="emby-input" placeholder="x-api-key"/>
+              </div>
+              <div style="flex:0;padding-bottom:2px;">
+                <button id="btnSaveWorkerConfig" is="emby-button" type="button" class="raised button-submit emby-button"><span>Guardar</span></button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-top:14px;">
+              <div class="inputContainer" style="flex:2;min-width:240px;">
+                <label class="inputLabel inputLabelUnfocused" for="TmdbApiKey">TMDB API Key (Bearer token v4)</label>
+                <input id="TmdbApiKey" is="emby-input" name="TmdbApiKey" type="password" class="emby-input" placeholder="eyJhbGciOiJIUzI1NiJ9..."/>
+              </div>
+              <div style="flex:1;min-width:160px;padding-bottom:2px;">
+                <p style="margin:0;font-size:.8em;color:rgba(255,255,255,.5);">Usado por el Plugin para enriquecer titulos EPG con metadatos TMDB despues de cada sincronizacion de fuentes.</p>
+              </div>
+            </div>
+            <div id="workerEpgUrlRow" style="display:none;margin-top:14px;padding:10px 14px;background:rgba(0,164,220,.08);border-left:3px solid rgba(0,164,220,.5);border-radius:4px;">
+              <p style="margin:0 0 6px;font-size:.85em;color:rgba(255,255,255,.6);">URL EPG para Jellyfin — Settings → Live TV → TV Guide → Agregar → XMLTV:</p>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <code id="workerEpgUrlText" style="flex:1;font-size:.9em;word-break:break-all;color:#00a4dc;"></code>
+                <button id="btnCopyEpgUrl" is="emby-button" type="button" class="emby-button" style="flex-shrink:0;padding:4px 10px;font-size:.8em;"><span>Copiar</span></button>
+              </div>
+            </div>
+          </div>
           <div class="jt-toolbar">
             <button id="btnScanChannels" is="emby-button" type="button" class="raised button-submit emby-button"><span>Escanear ahora</span></button>
           </div>
@@ -230,6 +263,47 @@
               <tbody id="channelsTableBody"></tbody>
             </table>
           </div>
+        </div>
+
+        <!-- ══ EPG / Guia ═════════════════════════════════════════════ -->
+        <div id="jt-tab-epg" class="jt-tab-content">
+          <div class="fieldDescription">El Plugin descarga los archivos XMLTV grandes en el servidor Jellyfin, filtra solo los canales presentes en el M3U y sube el resultado compacto al Worker. El Worker no procesa archivos de 100-200 MB.</div>
+
+          <div class="jt-panel" style="margin-top:1em;">
+            <h4>Fuentes EPG (XMLTV)</h4>
+            <div class="jt-toolbar" style="margin-bottom:.75em;">
+              <button id="btnAddEpgSource" is="emby-button" type="button" class="raised emby-button"><span>+ Agregar fuente EPG</span></button>
+              <button id="btnSyncEpg" is="emby-button" type="button" class="raised button-submit emby-button"><span>Sincronizar EPG al Worker</span></button>
+            </div>
+            <div id="epgSourceList"></div>
+            <div id="epgStatus" class="jt-status" style="margin-top:.5em;"></div>
+          </div>
+
+          <!-- Editor EPG source -->
+          <div id="epgEditor" style="display:none;margin-top:1em;padding:1em;background:rgba(255,255,255,.04);border-radius:6px;">
+            <input type="hidden" id="epgEditId"/>
+            <div class="jt-grid-2">
+              <div class="inputContainer">
+                <label class="inputLabel inputLabelUnfocused" for="epgEditName">Nombre</label>
+                <input id="epgEditName" is="emby-input" type="text" class="emby-input" placeholder="Mexico EPG"/>
+              </div>
+              <div class="inputContainer">
+                <label class="inputLabel inputLabelUnfocused" for="epgEditUrl">URL del archivo XMLTV</label>
+                <input id="epgEditUrl" is="emby-input" type="text" class="emby-input" placeholder="https://iptv-epg.org/files/epg-mx.xml"/>
+              </div>
+            </div>
+            <div style="margin-top:.5em;">
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                <input id="epgEditEnabled" type="checkbox" checked/> <span>Habilitada</span>
+              </label>
+            </div>
+            <div class="jt-toolbar" style="margin-top:.75em;">
+              <button id="btnSaveEpgSource" is="emby-button" type="button" class="raised button-submit emby-button"><span>Guardar</span></button>
+              <button id="btnCancelEpgSource" is="emby-button" type="button" class="raised emby-button"><span>Cancelar</span></button>
+            </div>
+          </div>
+
+          <div class="fieldDescription" style="margin-top:1.5em;font-size:.82em;opacity:.6;">Fuentes preset (copiar URL): mx=https://iptv-epg.org/files/epg-mx.xml &nbsp;|&nbsp; us=https://iptv-epg.org/files/epg-us.xml &nbsp;|&nbsp; co=https://iptv-epg.org/files/epg-co.xml &nbsp;|&nbsp; ar=https://iptv-epg.org/files/epg-ar.xml</div>
         </div>
 
         <!-- ══ Configuracion ════════════════════════════════════════════ -->
@@ -319,7 +393,7 @@
       }
       function getInt(id, fb) { var el = q(id); if (!el) return fb; var v = parseInt(el.value, 10); return isNaN(v) ? fb : v; }
       function setBusy(b) {
-        ['btnSaveAll','btnSaveSource','btnShowSourceEditor','btnSyncSources','btnShowProxyEditor','btnSaveProxy','btnScanChannels'].forEach(function(id) {
+        ['btnSaveAll','btnSaveWorkerConfig','btnSaveSource','btnShowSourceEditor','btnSyncSources','btnShowProxyEditor','btnSaveProxy','btnScanChannels'].forEach(function(id) {
           var el = q(id); if (el) el.disabled = !!b;
         });
       }
@@ -527,6 +601,17 @@
       }
 
       // ── Config ───────────────────────────────────────────────────────────
+      function updateWorkerEpgUrlDisplay(baseUrl) {
+        var row=q('workerEpgUrlRow'), txt=q('workerEpgUrlText');
+        if (!row||!txt) return;
+        var clean=(baseUrl||'').replace(/\/+$/,'');
+        if (clean.length>0) {
+          txt.textContent=clean+'/xmltv.xml';
+          row.style.display='block';
+        } else {
+          row.style.display='none';
+        }
+      }
       function applyConfig(cfg) {
         state.cfg = cfg||{};
         if (!Array.isArray(state.cfg.Sources)) state.cfg.Sources=[];
@@ -535,12 +620,17 @@
         Object.keys(fields).forEach(function(k){ var el=q(k); if(el) el.value=state.cfg[k]!==undefined?state.cfg[k]:fields[k]; });
         var ar=q('AutoRegisterTuner'); if(ar) ar.checked=state.cfg.AutoRegisterTuner!==false;
         var vl=q('VerboseLogging'); if(vl) vl.checked=!!state.cfg.VerboseLogging;
-        renderSources(); renderProxies();
+        var wu=q('WorkerBaseUrl'); if(wu) wu.value=state.cfg.WorkerBaseUrl||'';
+        var wk=q('WorkerApiKey'); if(wk) wk.value=state.cfg.WorkerApiKey||'';
+        var tk=q('TmdbApiKey'); if(tk) tk.value=state.cfg.TmdbApiKey||'';
+        updateWorkerEpgUrlDisplay(state.cfg.WorkerBaseUrl||'');
+        renderSources(); renderProxies(); renderEpgSources();
       }
       function collectConfig() {
         if (!state.cfg) state.cfg={};
         if (!Array.isArray(state.cfg.Sources)) state.cfg.Sources=[];
         if (!Array.isArray(state.cfg.Proxies)) state.cfg.Proxies=[];
+        if (!Array.isArray(state.cfg.EpgSources)) state.cfg.EpgSources=[];
         state.cfg.SourceSyncIntervalHours=getInt('SourceSyncIntervalHours',24);
         state.cfg.ChannelHealthCheckIntervalHours=getInt('ChannelHealthCheckIntervalHours',24);
         var ua=q('UserAgent'); state.cfg.UserAgent=ua?ua.value.trim():'';
@@ -548,6 +638,9 @@
         var psl=q('PreferredSubtitleLanguages'); state.cfg.PreferredSubtitleLanguages=psl?psl.value.trim():'es,spa';
         var ar=q('AutoRegisterTuner'); state.cfg.AutoRegisterTuner=!!(ar&&ar.checked);
         var vl=q('VerboseLogging'); state.cfg.VerboseLogging=!!(vl&&vl.checked);
+        var wu=q('WorkerBaseUrl'); state.cfg.WorkerBaseUrl=wu?wu.value.trim():'';
+        var wk=q('WorkerApiKey'); state.cfg.WorkerApiKey=wk?wk.value.trim():'';
+        var tk=q('TmdbApiKey'); state.cfg.TmdbApiKey=tk?tk.value.trim():'';
         return state.cfg;
       }
       function loadConfig() {
@@ -601,8 +694,22 @@
         el=q('btnSaveProxy');    if(el) el.addEventListener('click',saveProxy);
         el=q('btnCancelProxy');  if(el) el.addEventListener('click',hideProxyEditor);
         el=q('btnSaveAll');      if(el) el.addEventListener('click',saveAll);
+        el=q('btnSaveWorkerConfig'); if(el) el.addEventListener('click',saveAll);
+        el=q('btnCopyEpgUrl');
+        if(el) el.addEventListener('click',function(){
+          var txt=q('workerEpgUrlText');
+          if(txt&&txt.textContent) navigator.clipboard.writeText(txt.textContent).then(function(){
+            var ok='URL EPG copiada.'; setStatus('saveStatus',ok,false); clearLater('saveStatus',ok,2000);
+          });
+        });
+        el=q('WorkerBaseUrl');
+        if(el) el.addEventListener('input',function(){ updateWorkerEpgUrlDisplay(el.value); });
         el=q('btnSyncSources');  if(el) el.addEventListener('click',syncSources);
         el=q('btnScanChannels'); if(el) el.addEventListener('click',scanChannels);
+        el=q('btnAddEpgSource'); if(el) el.addEventListener('click',function(){ showEpgEditor(null,null); });
+        el=q('btnSyncEpg');      if(el) el.addEventListener('click',syncEpg);
+        el=q('btnSaveEpgSource');   if(el) el.addEventListener('click',saveEpgSource);
+        el=q('btnCancelEpgSource'); if(el) el.addEventListener('click',hideEpgEditor);
         el=q('btnCopyTuner');
         if(el) el.addEventListener('click',function(){
           navigator.clipboard.writeText(getUrl('/JellyTV/m3u')).then(function(){
@@ -690,7 +797,90 @@
                 });
             }
 
+      // ── EPG Sources ───────────────────────────────────────────────────────
+      function renderEpgSources() {
+        var list=q('epgSourceList');
+        if (!list) return;
+        var sources=(state.cfg&&state.cfg.EpgSources)||[];
+        if (sources.length===0) {
+          list.innerHTML='<div style="color:rgba(255,255,255,.4);font-size:.85em;padding:8px 0;">No hay fuentes EPG configuradas. Agrega una URL XMLTV.</div>';
+          return;
+        }
+        var html='<table class="jt-table" style="margin-top:.5em;"><thead><tr><th>Nombre</th><th>URL</th><th>Estado</th><th>Ultimo sync</th><th></th></tr></thead><tbody>';
+        sources.forEach(function(s,i) {
+          var syncInfo=s.LastSyncSummary||'-';
+          var syncDate=s.LastSyncedAt?new Date(s.LastSyncedAt).toLocaleString('es-MX'):'Nunca';
+          var err=s.LastSyncError?(' <span style="color:#ef5350;font-size:.8em;">'+escHtml(s.LastSyncError.slice(0,60))+'</span>'):'';
+          html+='<tr>';
+          html+='<td>'+escHtml(s.Name||'Sin nombre')+(s.IsEnabled===false?' <span style="opacity:.4;">[deshabilitada]</span>':'')+'</td>';
+          html+='<td style="font-size:.8em;word-break:break-all;">'+escHtml(s.Url||'-')+'</td>';
+          html+='<td>'+escHtml(syncInfo)+err+'</td>';
+          html+='<td style="font-size:.8em;">'+syncDate+'</td>';
+          html+='<td style="white-space:nowrap;">'
+            +'<button type="button" class="jt-icon-btn" onclick="editEpgSource('+i+')">&#9998;</button> '
+            +'<button type="button" class="jt-icon-btn" onclick="toggleEpgSource('+i+')">'+(s.IsEnabled===false?'&#9654;':'&#9646;&#9646;')+'</button> '
+            +'<button type="button" class="jt-icon-btn" style="color:#ef5350;" onclick="deleteEpgSource('+i+')">&#128465;</button>'
+            +'</td>';
+          html+='</tr>';
+        });
+        html+='</tbody></table>';
+        list.innerHTML=html;
+      }
+      function escHtml(v) { return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+      function showEpgEditor(source,idx) {
+        var editor=q('epgEditor');
+        if (!editor) return;
+        q('epgEditId').value=idx!=null?idx:'';
+        q('epgEditName').value=source?source.Name||'':'';
+        q('epgEditUrl').value=source?source.Url||'':'';
+        q('epgEditEnabled').checked=source?source.IsEnabled!==false:true;
+        editor.style.display='block';
+      }
+      function hideEpgEditor() { var e=q('epgEditor'); if(e) e.style.display='none'; }
+      function editEpgSource(i) { showEpgEditor(state.cfg.EpgSources[i],i); }
+      function deleteEpgSource(i) {
+        if (!confirm('Eliminar esta fuente EPG?')) return;
+        state.cfg.EpgSources.splice(i,1);
+        saveConfig(state.cfg).then(renderEpgSources).catch(function(e){ setStatus('epgStatus','Error: '+e.message,true); });
+      }
+      function toggleEpgSource(i) {
+        if (!state.cfg.EpgSources[i]) return;
+        state.cfg.EpgSources[i].IsEnabled=!state.cfg.EpgSources[i].IsEnabled;
+        saveConfig(state.cfg).then(renderEpgSources).catch(function(e){ state.cfg.EpgSources[i].IsEnabled=!state.cfg.EpgSources[i].IsEnabled; setStatus('epgStatus','Error: '+e.message,true); });
+      }
+      function saveEpgSource() {
+        var name=q('epgEditName').value.trim();
+        var url=q('epgEditUrl').value.trim();
+        var enabled=q('epgEditEnabled').checked;
+        var idxRaw=q('epgEditId').value;
+        if (!name) { alert('El nombre es obligatorio'); return; }
+        if (!url)  { alert('La URL es obligatoria'); return; }
+        if (!Array.isArray(state.cfg.EpgSources)) state.cfg.EpgSources=[];
+        var idx=idxRaw!==''?parseInt(idxRaw,10):-1;
+        if (idx>=0 && idx<state.cfg.EpgSources.length) {
+          state.cfg.EpgSources[idx].Name=name;
+          state.cfg.EpgSources[idx].Url=url;
+          state.cfg.EpgSources[idx].IsEnabled=enabled;
+        } else {
+          state.cfg.EpgSources.push({Id:Math.random().toString(36).slice(2,10),Name:name,Url:url,IsEnabled:enabled});
+        }
+        saveConfig(state.cfg).then(function(){ renderEpgSources(); hideEpgEditor(); var ok='Fuente EPG guardada.'; setStatus('epgStatus',ok,false); clearLater('epgStatus',ok,2500); }).catch(function(e){ setStatus('epgStatus','Error: '+e.message,true); });
+      }
+      function syncEpg() {
+        setBusy(true);
+        setStatus('epgStatus','Iniciando sincronizacion EPG en background...',false);
+        fetch(getUrl('/JellyTV/epg/sync'),{method:'POST',credentials:'include'})
+          .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+          .then(function(){ var ok='Sincronizacion EPG iniciada. Revisa los logs del plugin para el resultado.'; setStatus('epgStatus',ok,false); clearLater('epgStatus',ok,8000); })
+          .catch(function(e){ setStatus('epgStatus','Error: '+e.message,true); })
+          .finally(function(){ setBusy(false); });
+      }
+
       bindPageShow();
+      // Expose EPG inline-onclick handlers to global scope (called from dynamic HTML)
+      window.editEpgSource   = editEpgSource;
+      window.deleteEpgSource = deleteEpgSource;
+      window.toggleEpgSource = toggleEpgSource;
       if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',function(){bindPageShow();bootstrap();});
       else bootstrap();
       window.addEventListener('hashchange',function(){ if(location.hash&&location.hash.includes('configurationpage?name=JellyTV')){bindPageShow();bootstrap();} });

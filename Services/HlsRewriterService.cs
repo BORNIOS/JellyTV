@@ -51,14 +51,54 @@ public class HlsRewriterService
         var resolved = session.LastResolved
             ?? throw new InvalidOperationException("Session has no resolved stream.");
 
-        if (!string.IsNullOrWhiteSpace(session.LastPlaylistContent)
-            && string.Equals(session.LastPlaylistSourceUrl, resolved.FinalUrl, StringComparison.Ordinal)
-            && session.LastPlaylistFetchedAt.HasValue
-            && DateTimeOffset.UtcNow - session.LastPlaylistFetchedAt.Value < TimeSpan.FromSeconds(5))
+        // --- CASO 1: El resolver ya capturo el body durante la cadena de redirects.
+        // Usarlo directamente evita un segundo GET al token de un solo uso.
+        if (!string.IsNullOrWhiteSpace(resolved.InitialPlaylistContent))
         {
+            PluginLog.Info($"[HLS] Using resolver-cached playlist sid={session.SessionId}");
+            var fresh = resolved.InitialPlaylistContent;
+            resolved.InitialPlaylistContent = null;
+
+            var (ws, ts) = AnalyzeMediaPlaylistWindow(fresh);
+            session.LastPlaylistWindowSeconds = ws;
+            session.LastPlaylistTargetDurationSeconds = ts;
+
+            var rw = RewritePlaylist(fresh, resolved, session.SessionId, proxyBaseUrl);
+            session.LastPlaylistContent = rw;
+            session.LastPlaylistSourceUrl = resolved.FinalUrl;
+            session.LastPlaylistFetchedAt = DateTimeOffset.UtcNow;
+            return rw;
+        }
+
+        // --- CASO 2: Tenemos playlist cacheado y la ventana HLS no ha expirado todavia.
+        // Servir desde cache sin ningun request externo.
+        // La ventana de segmentos del proveedor suele ser 40-60s; el controlador ya se
+        // encarga de renovar el token antes de que expire (deteccion de ultimo segmento).
+        if (!string.IsNullOrWhiteSpace(session.LastPlaylistContent)
+            && session.LastPlaylistFetchedAt.HasValue)
+        {
+            var age = DateTimeOffset.UtcNow - session.LastPlaylistFetchedAt.Value;
+            // Usar la ventana conocida menos un margen de un segmento; si no la conocemos, 50s.
+            var windowTtl = session.LastPlaylistWindowSeconds.HasValue
+                ? TimeSpan.FromSeconds(Math.Max(10, session.LastPlaylistWindowSeconds.Value - (session.LastPlaylistTargetDurationSeconds ?? 10)))
+                : TimeSpan.FromSeconds(50);
+
+            if (age < windowTtl)
+            {
+                // Cache vigente: devolver sin tocar el proveedor.
+                return session.LastPlaylistContent;
+            }
+
+            // Cache expirado pero aun no tenemos InitialPlaylistContent del renewal.
+            // Servir stale para no romper playback; el controlador triggera renewal por
+            // deteccion de ultimo segmento y, cuando llegue, tendra InitialPlaylistContent.
+            PluginLog.Warn($"[HLS] Playlist cache expired (age={age.TotalSeconds:F0}s window={windowTtl.TotalSeconds:F0}s) but no renewal ready yet sid={session.SessionId} — serving stale to preserve playback");
             return session.LastPlaylistContent;
         }
 
+        // --- CASO 3: Sin cache y sin InitialPlaylistContent (sesion nueva, primer poll
+        // despues de fallo de red, etc.). Hacer fetch directo como fallback.
+        PluginLog.Info($"[HLS] No cache and no InitialPlaylistContent, fetching direct sid={session.SessionId}");
         var playlistContent = await FetchPlaylistWithProxyRotationAsync(resolved.FinalUrl, cancellationToken)
             .ConfigureAwait(false);
 
@@ -77,7 +117,6 @@ public class HlsRewriterService
     private async Task<string> FetchPlaylistWithProxyRotationAsync(string playlistUrl, CancellationToken cancellationToken)
     {
         var directClient = _httpClientFactory.CreateClient("JellyTV");
-        HttpRequestException? lastAuthException = null;
         Exception? lastException = null;
 
         for (var attempt = 1; attempt <= 4; attempt++)
@@ -95,15 +134,6 @@ public class HlsRewriterService
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    if ((int)response.StatusCode is 401 or 403)
-                    {
-                        lastAuthException = new HttpRequestException(
-                            $"Response status code does not indicate success: {(int)response.StatusCode} ({response.StatusCode}).",
-                            null,
-                            response.StatusCode);
-                        continue;
-                    }
-
                     throw new HttpRequestException(
                         $"Response status code does not indicate success: {(int)response.StatusCode} ({response.StatusCode}).",
                         null,
@@ -119,7 +149,12 @@ public class HlsRewriterService
             }
             catch (HttpRequestException ex) when ((int?)ex.StatusCode is 401 or 403)
             {
-                lastAuthException = ex;
+                // Auth failures are token-specific, not proxy-related.
+                // Rotating to a different proxy will NOT fix an expired token.
+                // Re-throw immediately so the caller triggers renewal without burning
+                // 3 more round-trips that all produce 403 for the same stale token.
+                PluginLog.Warn($"[HLS] Playlist auth failure {(int?)ex.StatusCode} for {playlistUrl} — failing fast (no proxy rotation for auth errors)");
+                throw;
             }
             catch (HttpRequestException ex) when (proxyKey is not null && ex.StatusCode is null)
             {
@@ -131,11 +166,6 @@ public class HlsRewriterService
                 lastException = ex;
                 _logger.LogWarning(ex, "[JellyTV] Playlist fetch attempt {Attempt} failed for {Url}", attempt, playlistUrl);
             }
-        }
-
-        if (lastAuthException is not null)
-        {
-            throw lastAuthException;
         }
 
         if (lastException is not null)

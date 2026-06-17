@@ -97,6 +97,13 @@ public class ChannelHealthCheckTask : IScheduledTask
 
                     PluginLog.Info($"[HEALTH-TASK] Source '{source.Name}': {alive}/{results.Count} canales vivos");
 
+                    // Report results to the Cloudflare Worker for automatic failover
+                    var reporter = Plugin.Instance?.WorkerReporter;
+                    if (reporter is not null)
+                    {
+                        await reporter.ReportAsync(results, cancellationToken).ConfigureAwait(false);
+                    }
+
                     if (dead > 0)
                     {
                         var deadChannels = string.Join(", ", results.Where(r => !r.IsAlive).Select(r => r.ChannelName).Take(5));

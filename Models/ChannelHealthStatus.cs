@@ -23,6 +23,9 @@ public class ChannelHealthStatus
     /// <summary>Whether this channel is considered "alive" (successful real download).</summary>
     public bool IsAlive => HttpStatus >= 200 && HttpStatus < 400 && BytesDownloaded >= 200_000; // At least 200KB
 
+    /// <summary>Human-readable status: "LIVE" or "DEAD".</summary>
+    public string Status => IsAlive ? "LIVE" : "DEAD";
+
     /// <summary>When the health check was performed.</summary>
     public DateTimeOffset CheckedAt { get; set; }
 
