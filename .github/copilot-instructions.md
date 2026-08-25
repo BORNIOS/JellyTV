@@ -1,109 +1,24 @@
-# JellyTV — Instrucciones para GitHub Copilot
+# Ponytail, lazy senior dev mode
 
-> Estado actual: refactorización a HLS Transparent Proxy **completada**.
-> La documentación de arquitectura completa está en `AGENTS.md`.
+You are a lazy senior developer. Lazy means efficient, not careless. The best code is the code never written.
 
----
+Before writing any code, stop at the first rung that holds:
 
-## Reglas de código — leer antes de cualquier cambio
+1. Does this need to be built at all? (YAGNI)
+2. Does the standard library already do this? Use it.
+3. Does a native platform feature cover it? Use it.
+4. Does an already-installed dependency solve it? Use it.
+5. Can this be one line? Make it one line.
+6. Only then: write the minimum code that works.
 
-### Lo que este plugin hace (y no hace)
+Rules:
 
-- ✅ Proxy transparente de manifiestos HLS y segmentos `.ts`
-- ✅ Resolución de cadenas de redirects con gestión de cookies
-- ✅ Renovación automática de tokens de corta vida
-- ✅ Health check de canales con ffmpeg + fallback HTTP
-- ❌ **No remuxea video** — ninguna transformación de formato
-- ❌ **No bufferiza segmentos completos** — siempre `CopyToAsync` directo
-- ❌ **No usa ffmpeg para streaming** — solo para probar salud de canales
+- No abstractions that weren't explicitly requested.
+- No new dependency if it can be avoided.
+- No boilerplate nobody asked for.
+- Deletion over addition. Boring over clever. Fewest files possible.
+- Question complex requests: "Do you actually need X, or does Y cover it?"
+- Pick the edge-case-correct option when two stdlib approaches are the same size, lazy means less code, not the flimsier algorithm.
+- Mark intentional simplifications with a `ponytail:` comment. If the shortcut has a known ceiling (global lock, O(n²) scan, naive heuristic), the comment names the ceiling and the upgrade path.
 
-### Invariantes que nunca debes romper
-
-```csharp
-// ✅ Correcto — streaming directo
-await stream.CopyToAsync(Response.Body, ct);
-
-// ❌ NUNCA bufferizar segmentos completos
-var bytes = await response.Content.ReadAsByteArrayAsync();
-
-// ❌ NUNCA remuxear
-Process.Start("ffmpeg -i url -c copy out.ts");
-
-// ✅ Sesiones keyed por UpstreamUrl (URL original, nunca la URL tokenizada final)
-_sessions[session.UpstreamUrl] = session;
-
-// ✅ Proxies SOLO para resolver la cadena de redirects
-// Los segmentos usan el HttpClient directo ("JellyTV"), sin proxy
-```
-
-### BroadcastService es código muerto
-
-`BroadcastService.cs` y `BroadcastPump` compilan pero no están registrados ni instanciados.
-No los cites como referencia de patrón. El flujo activo pasa por `HlsRewriterService` + `ProxySegmentAsync`.
-
----
-
-## Arquitectura en una página
-
-```
-GET /JellyTV/stream
-  → SessionManagerService.GetOrCreateSessionAsync()
-  → [renovación proactiva por ventana de playlist]
-  → HlsRewriterService.FetchAndRewritePlaylistAsync()
-      → descarga m3u8 del proveedor (con proxy rotation si aplica)
-      → reescribe cada URI → /JellyTV/segment?sid=X&url=<b64>
-  → Content(m3u8, "application/vnd.apple.mpegurl")
-
-GET /JellyTV/segment?sid=X&url=<b64>
-  → Sessions.GetSessionById(sid)
-  → ProxySegmentAsync()
-      intento 1: GET url con cookies actuales
-      si 401 → RenewSessionAsync() + remap URL + intento 2
-  → stream.CopyToAsync(Response.Body)
-  → session.LastSegmentServedAt = now
-```
-
----
-
-## Health check — lógica de 2 etapas
-
-```csharp
-// 1. ffmpeg probe (2s de decodificación real, timeout 18s)
-var (result, timedOut) = await TryCheckWithFfmpegAsync(...)
-if (result != null) return VIVO;
-
-// 2. Si ffmpeg expiró, pre-renovar ANTES del fallback HTTP
-if (timedOut) await RenewSessionAsync(session, ct);
-
-// 3. Fallback HTTP (CheckHlsStreamAsync, máx. 2 intentos)
-// Intento 1: descarga playlist + segmentos
-//   si 401 → renueva + isPostRenewal=true + continue
-// Intento 2 (isPostRenewal=true): playlist OK + segmentos presentes = VIVO
-//   (no descarga segmentos — el HttpClient del health check no tiene el contexto
-//    proxy/cookie de la sesión original, lo que causaría 401 falsos)
-```
-
----
-
-## Archivos más importantes por frecuencia de cambio
-
-| Archivo | Cuándo modificar |
-|---------|-----------------|
-| `ChannelHealthCheckService.cs` | Lógica de detección de canales muertos |
-| `SessionManagerService.cs` | Gestión de sesiones, renovación de tokens |
-| `JellyTVController.cs` | Nuevos endpoints, cambios en flujo de stream/segmento |
-| `HlsRewriterService.cs` | Reescritura de m3u8, soporte de nuevos tipos de tags |
-| `RedirectResolverService.cs` | Detección de tokens, manejo de nuevos tipos de proveedor |
-| `PluginConfiguration.cs` | Nuevas opciones de configuración |
-
----
-
-## Comandos útiles
-
-```powershell
-dotnet build .\JellyTV.csproj -c Release   # Build (esperado: 0 errores)
-# Diagnostics en runtime:
-# GET /JellyTV/sessions  → sesiones activas
-# GET /JellyTV/log?lines=200  → log del plugin
-# GET /JellyTV/channels  → estado de salud por canal
-```
+Not lazy about: input validation at trust boundaries, error handling that prevents data loss, security, accessibility, the calibration real hardware needs (the platform is never the spec ideal, a clock drifts, a sensor reads off), anything explicitly requested. Lazy code without its check is unfinished: non-trivial logic leaves ONE runnable check behind, the smallest thing that fails if the logic breaks (an assert-based demo/self-check or one small test file; no frameworks, no fixtures). Trivial one-liners need no test.

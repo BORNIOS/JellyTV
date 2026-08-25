@@ -1,6 +1,6 @@
 using System;
 
-namespace JellyTV.Models;
+namespace Jellyfin.Plugin.JellyTV.Models;
 
 /// <summary>
 /// Represents a single M3U/IPTV source managed by the plugin.

@@ -4,10 +4,10 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Models;
 using Microsoft.Extensions.Logging;
 
-namespace JellyTV.Services;
+namespace Jellyfin.Plugin.JellyTV.Services;
 
 /// <summary>
 /// Fetches all configured M3U sources and returns a combined, rewritten playlist
@@ -61,53 +61,29 @@ public class M3uAggregatorService
             return _cachedM3u;
         }
 
-        var enabledSources = config.Sources.FindAll(s => s.IsEnabled && !string.IsNullOrWhiteSpace(s.Url));
-        PluginLog.Info($"[M3U] Building combined M3U from {enabledSources.Count} source(s)");
+        var channels = config.Channels?.FindAll(c => c.IsEnabled && !string.IsNullOrWhiteSpace(c.Url)) ?? new();
+        PluginLog.Info($"[M3U] Building combined M3U from {channels.Count} channel(s)");
 
         var sb = new StringBuilder();
         sb.AppendLine("#EXTM3U");
 
-        var client = _httpClientFactory.CreateClient("JellyTV");
-        var totalChannels = 0;
-        var timeoutSeconds = REQUEST_TIMEOUT_SECONDS;
-
-        foreach (var source in enabledSources)
+        foreach (var ch in channels)
         {
-            try
-            {
-                PluginLog.Info($"[M3U] Fetching source '{source.Name}'");
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-                var content = await client.GetStringAsync(source.Url, timeoutCts.Token).ConfigureAwait(false);
-                var channels = ParseAndRewrite(content, source, proxyBaseUrl);
-                sb.Append(channels.content);
-                totalChannels += channels.count;
-                source.LastFetched = DateTimeOffset.UtcNow;
-                source.LastChannelCount = channels.count;
-                source.LastError = null;
-                PluginLog.Info($"[M3U] Source '{source.Name}': {channels.count} channels OK");
-            }
-            catch (TaskCanceledException ex)
-            {
-                source.LastError = "Timeout o cancelacion al descargar la fuente.";
-                _logger.LogWarning(ex, "[JellyTV] M3U source '{Name}' timed out/cancelled", source.Name);
-                PluginLog.Warn($"[M3U] Source '{source.Name}' timeout/cancelada.");
-            }
-            catch (Exception ex)
-            {
-                source.LastError = ex.Message;
-                _logger.LogError(ex, "[JellyTV] Failed to fetch M3U source '{Name}': {Url}", source.Name, source.Url);
-                PluginLog.Error($"[M3U] Source '{source.Name}' failed: {ex.Message}");
-            }
-        }
+            var encodedUrl = Convert.ToBase64String(Encoding.UTF8.GetBytes(ch.Url))
+                .Replace('+', '-').Replace('/', '_').TrimEnd('=');
 
-        // Persist updated source stats
-        try { Plugin.Instance?.SaveConfiguration(); } catch { }
+            if (!string.IsNullOrWhiteSpace(ch.TvgId))
+                sb.AppendLine($"#EXTINF:-1 tvg-id=\"{ch.TvgId}\" tvg-name=\"{ch.TvgName ?? ch.Name}\" tvg-logo=\"{ch.LogoUrl ?? ""}\" group-title=\"{ch.Category ?? ""}\",{ch.Name}");
+            else
+                sb.AppendLine($"#EXTINF:-1 tvg-name=\"{ch.TvgName ?? ch.Name}\" tvg-logo=\"{ch.LogoUrl ?? ""}\" group-title=\"{ch.Category ?? ""}\",{ch.Name}");
+
+            sb.AppendLine($"{proxyBaseUrl}/stream.m3u8?url={encodedUrl}");
+        }
 
         _cachedM3u = sb.ToString();
         _cachedAt = DateTimeOffset.UtcNow;
 
-        PluginLog.Info($"[M3U] Combined M3U ready: {totalChannels} total channels");
+        PluginLog.Info($"[M3U] Combined M3U ready: {channels.Count} total channels");
         return _cachedM3u;
         }
         finally

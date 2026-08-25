@@ -7,11 +7,11 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
-using JellyTV.Models;
-using JellyTV.Services.Tmdb;
+using Jellyfin.Plugin.JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Services.Tmdb;
 using Microsoft.Extensions.Logging;
 
-namespace JellyTV.Services;
+namespace Jellyfin.Plugin.JellyTV.Services;
 
 /// <summary>
 /// Downloads large XMLTV files on the Jellyfin server (full CPU/RAM available),
@@ -182,44 +182,24 @@ public class EpgFilterService
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     /// <summary>
-    /// Reads all enabled M3U sources and extracts unique tvg-id values.
+    /// Reads all enabled channels and extracts their tvg-id values directly.
     /// </summary>
-    internal async Task<HashSet<string>> CollectTvgIdsAsync(CancellationToken ct)
+    internal Task<HashSet<string>> CollectTvgIdsAsync(CancellationToken ct)
     {
         var config = Plugin.Instance?.Configuration;
         var tvgIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (config is null) return tvgIds;
+        if (config is null) return Task.FromResult(tvgIds);
 
-        var client = _httpClientFactory.CreateClient("JellyTV");
-        var sources = config.Sources?.FindAll(s => s.IsEnabled && !string.IsNullOrWhiteSpace(s.Url)) ?? new();
+        var channels = config.Channels?.FindAll(c => c.IsEnabled && !string.IsNullOrWhiteSpace(c.TvgId)) ?? new();
 
-        foreach (var source in sources)
+        foreach (var ch in channels)
         {
-            try
-            {
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cts.CancelAfter(TimeSpan.FromSeconds(M3U_TIMEOUT_SECONDS));
-
-                var m3uText = await client.GetStringAsync(source.Url, cts.Token);
-
-                // Extract tvg-id="..." from EXTINF lines
-                var matches = Regex.Matches(m3uText, @"tvg-id=""([^""]*)""", RegexOptions.IgnoreCase);
-                foreach (Match m in matches)
-                {
-                    var id = m.Groups[1].Value.Trim();
-                    if (!string.IsNullOrEmpty(id))
-                        tvgIds.Add(id);
-                }
-
-                PluginLog.Info($"[EPG] Source '{source.Name}': found {matches.Count} tvg-id entries (total distinct so far: {tvgIds.Count})");
-            }
-            catch (Exception ex)
-            {
-                PluginLog.Error($"[EPG] Failed to read tvg-ids from M3U source '{source.Name}'", ex);
-            }
+            if (!string.IsNullOrWhiteSpace(ch.TvgId))
+                tvgIds.Add(ch.TvgId.Trim());
         }
 
-        return tvgIds;
+        PluginLog.Info($"[EPG] Collected {tvgIds.Count} distinct tvg-id(s) from channels");
+        return Task.FromResult(tvgIds);
     }
 
     /// <summary>

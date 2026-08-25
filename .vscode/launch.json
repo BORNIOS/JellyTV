@@ -1,0 +1,41 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "coreclr",
+      "name": "Launch Jellyfin + Deploy",
+      "request": "launch",
+      "preLaunchTask": "deploy-no-restart",
+      "program": "${config:jellyfinDir}/jellyfin.dll",
+      "args": [
+        "--datadir",
+        "${config:jellyfinDataDir}"
+      ],
+      "cwd": "${config:jellyfinDir}",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "justMyCode": false
+    },
+    {
+      "type": "coreclr",
+      "name": "Launch Jellyfin (sin build)",
+      "request": "launch",
+      "program": "${config:jellyfinDir}/jellyfin.dll",
+      "args": [
+        "--datadir",
+        "${config:jellyfinDataDir}"
+      ],
+      "cwd": "${config:jellyfinDir}",
+      "console": "internalConsole",
+      "stopAtEntry": false,
+      "justMyCode": false
+    },
+    {
+      "type": "coreclr",
+      "name": "Attach to Jellyfin",
+      "request": "attach",
+      "processName": "jellyfin.exe",
+      "justMyCode": false
+    }
+  ]
+}

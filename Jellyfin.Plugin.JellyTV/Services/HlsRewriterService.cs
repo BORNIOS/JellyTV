@@ -6,11 +6,11 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
-namespace JellyTV.Services;
+namespace Jellyfin.Plugin.JellyTV.Services;
 
 /// <summary>
 /// Fetches and rewrites HLS playlists so all segment and sub-playlist URLs
@@ -20,7 +20,21 @@ public class HlsRewriterService
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ProxyPoolService _proxyPool;
+    private readonly RedirectResolverService _resolver;
     private readonly ILogger<HlsRewriterService> _logger;
+
+    /// <summary>
+    /// Backoff after a rejected token renewal. The token generator (e.g. alfa) applies
+    /// a strict per-IP rate limit; hammering it makes playback stall for the whole window.
+    /// </summary>
+    private static readonly TimeSpan TokenRenewalCooldown = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Intervalo para renovar proactivamente el token antes de que expire. El proveedor
+    /// emite tokens de corta vida (~2 min observado); renovar cada minuto mantiene uno
+    /// fresco y evita el corte cuando el token muere (la app oficial re-consulta la URL).
+    /// </summary>
+    private static readonly TimeSpan ProactiveRenewalInterval = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="HlsRewriterService"/> class.
@@ -28,11 +42,26 @@ public class HlsRewriterService
     public HlsRewriterService(
         IHttpClientFactory httpClientFactory,
         ProxyPoolService proxyPool,
+        RedirectResolverService resolver,
         ILogger<HlsRewriterService> logger)
     {
         _httpClientFactory = httpClientFactory;
         _proxyPool = proxyPool;
+        _resolver = resolver;
         _logger = logger;
+    }
+
+    /// <summary>
+    /// TTL del cache de playlist. Los segmentos de la ventana expiran en pocos segundos
+    /// (verificado: el segmento mas viejo devuelve 403 unos segundos despues de publicarse).
+    /// Un TTL cercano a la ventana entera hace que FFmpeg intente segmentos ya expirados y
+    /// congele entre cambios de ventana. Servir siempre una ventana fresca (~1/3 de la ventana).
+    /// </summary>
+    private static TimeSpan GetPlaylistTtl(double? windowSeconds)
+    {
+        var window = windowSeconds ?? 5;
+        var ttlSeconds = Math.Clamp(window / 3.0, 2.0, 4.0);
+        return TimeSpan.FromSeconds(ttlSeconds);
     }
 
     /// <summary>
@@ -51,41 +80,261 @@ public class HlsRewriterService
         var resolved = session.LastResolved
             ?? throw new InvalidOperationException("Session has no resolved stream.");
 
+        // Fast path: cache hit → no lock needed.
         if (!string.IsNullOrWhiteSpace(session.LastPlaylistContent)
-            && string.Equals(session.LastPlaylistSourceUrl, resolved.FinalUrl, StringComparison.Ordinal)
             && session.LastPlaylistFetchedAt.HasValue
-            && DateTimeOffset.UtcNow - session.LastPlaylistFetchedAt.Value < TimeSpan.FromSeconds(5))
+            && string.Equals(session.LastPlaylistSourceUrl, resolved.FinalUrl, StringComparison.Ordinal))
         {
-            return session.LastPlaylistContent;
+            var age = DateTimeOffset.UtcNow - session.LastPlaylistFetchedAt.Value;
+            var ttl = GetPlaylistTtl(session.LastPlaylistWindowSeconds);
+            if (age < ttl)
+            {
+                PluginLog.Info($"[HLS] Cache hit (age={age.TotalSeconds:F0}s ttl={ttl.TotalSeconds:F0}s)");
+                return session.LastPlaylistContent;
+            }
         }
 
-        var playlistContent = await FetchPlaylistWithProxyRotationAsync(resolved.FinalUrl, cancellationToken)
-            .ConfigureAwait(false);
+        // Slow path: cache expired. Serialize with a semaphore so ffmpeg + browser
+        // don't both fetch from alfa simultaneously, doubling rate-limit pressure.
+        await session.PlaylistFetchLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // Re-check cache: another consumer may have populated it while we waited.
+            if (!string.IsNullOrWhiteSpace(session.LastPlaylistContent)
+                && session.LastPlaylistFetchedAt.HasValue
+                && string.Equals(session.LastPlaylistSourceUrl, session.LastResolved?.FinalUrl, StringComparison.Ordinal))
+            {
+                var age = DateTimeOffset.UtcNow - session.LastPlaylistFetchedAt.Value;
+                var ttl2 = GetPlaylistTtl(session.LastPlaylistWindowSeconds);
+                if (age < ttl2)
+                {
+                    PluginLog.Info($"[HLS] Cache hit after wait (age={age.TotalSeconds:F0}s ttl={ttl2.TotalSeconds:F0}s)");
+                    return session.LastPlaylistContent;
+                }
+            }
 
-        var (windowSeconds, targetDurationSeconds) = AnalyzeMediaPlaylistWindow(playlistContent);
-        session.LastPlaylistWindowSeconds = windowSeconds;
-        session.LastPlaylistTargetDurationSeconds = targetDurationSeconds;
+            // ponytail: for tokenized streams, use FinalUrl (tuenisix?token=XXX)
+            // directly — tuenisix sirve playlist y segmentos sin rate-limit mientras
+            // el token es valido. La renovacion (contra alfa) solo se dispara por
+            // 403 real o proactivamente antes de que el token expire.
+            // Proxy rotation is disabled — alfa blocks proxy IPs anyway.
+            resolved = session.LastResolved
+                ?? throw new InvalidOperationException("Session has no resolved stream.");
+            var isTokenized = !string.IsNullOrWhiteSpace(resolved.TokenValue);
 
-        var rewritten = RewritePlaylist(playlistContent, resolved, session.SessionId, proxyBaseUrl);
-        session.LastPlaylistContent = rewritten;
-        session.LastPlaylistSourceUrl = resolved.FinalUrl;
-        session.LastPlaylistFetchedAt = DateTimeOffset.UtcNow;
+            // Renovacion proactiva: mantener un token fresco (< 60s) evita el corte
+            // cuando el token muere (el proveedor lo rechaza con 403 en el peor momento).
+            if (isTokenized && ShouldProactivelyRenew(session))
+            {
+                PluginLog.Info("[HLS] Proactive token renewal (age threshold reached).");
+                var pr = !string.IsNullOrWhiteSpace(session.TokenRenewalUrl)
+                    ? await TryRenewPlaylistViaGeneratorAsync(session, cancellationToken).ConfigureAwait(false)
+                    : null;
+                if (pr is null && !string.IsNullOrWhiteSpace(session.UpstreamUrl))
+                {
+                    await TryReResolveOriginAsync(session, cancellationToken).ConfigureAwait(false);
+                }
 
-        return rewritten;
+                resolved = session.LastResolved;
+            }
+
+            string playlistContent;
+            string finalPlaylistUrl;
+            try
+            {
+                (playlistContent, finalPlaylistUrl) = await FetchPlaylistWithProxyRotationAsync(resolved.FinalUrl, isTokenized, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (HttpRequestException ex) when (IsAuthenticationFailure(ex) && isTokenized)
+            {
+                // Solo los tokens efimeros (type 2) se renuevan. Directo/FAST/permanente:
+                // un 403 es terminal para el token actual, no se re-resuelve.
+                if (session.ChannelType != 2)
+                {
+                    PluginLog.Warn($"[HLS] Auth failure on non-ephemeral channel (type={session.ChannelType}); not renewing.");
+                    throw;
+                }
+
+                // Sin URL de generacion ni origen, no hay nada que renovar.
+                if (string.IsNullOrWhiteSpace(session.TokenRenewalUrl) && string.IsNullOrWhiteSpace(session.UpstreamUrl))
+                {
+                    throw;
+                }
+
+                // Respect the generator's per-IP rate limit: after a failed renewal,
+                // back off before trying again and keep serving the last valid playlist.
+                if (session.LastTokenRenewalAttemptAt is { } lastAttempt
+                    && DateTimeOffset.UtcNow - lastAttempt < TokenRenewalCooldown)
+                {
+                    PluginLog.Warn($"[HLS] Token renewal in cooldown; serving stale cache ({(int?)ex.StatusCode}).");
+                    throw;
+                }
+
+                session.LastTokenRenewalAttemptAt = DateTimeOffset.UtcNow;
+                PluginLog.Warn($"[HLS] Final token rejected; renewing via {session.TokenRenewalUrl}");
+
+                // Intento 1: renovar contra el hop generador (alfa), como la resolucion inicial.
+                var renewed = !string.IsNullOrWhiteSpace(session.TokenRenewalUrl)
+                    ? await TryRenewPlaylistViaGeneratorAsync(session, cancellationToken).ConfigureAwait(false)
+                    : null;
+                if (renewed is null)
+                {
+                    // Intento 2: re-resolver desde el origen (api -> alfa -> tuenisix), el
+                    // mismo camino con el que arranco la sesion y que la app oficial usa.
+                    if (!string.IsNullOrWhiteSpace(session.UpstreamUrl)
+                        && await TryReResolveOriginAsync(session, cancellationToken).ConfigureAwait(false))
+                    {
+                        PluginLog.Info("[HLS] Renewed via origin re-resolve; fetching fresh playlist.");
+                        (playlistContent, finalPlaylistUrl) = await FetchPlaylistWithProxyRotationAsync(
+                            session.LastResolved.FinalUrl, true, cancellationToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        PluginLog.Warn("[HLS] Renewal rejected by generator; serving stale cache.");
+                        throw;
+                    }
+                }
+                else
+                {
+                    (playlistContent, finalPlaylistUrl) = renewed.Value;
+                }
+            }
+            resolved = session.LastResolved ?? resolved;
+            UpdateResolvedFinalUrl(resolved, finalPlaylistUrl);
+            PluginLog.Info($"[HLS] Fetched {playlistContent.Length} bytes OK from {finalPlaylistUrl}");
+
+            var (windowSeconds, targetDurationSeconds) = AnalyzeMediaPlaylistWindow(playlistContent);
+            session.LastPlaylistSegmentUrls = ExtractMediaSegmentUrls(playlistContent, resolved).ToArray();
+            var segmentCount = session.LastPlaylistSegmentUrls.Length;
+            PluginLog.Info($"[HLS] Window={windowSeconds:F1}s TargetDur={targetDurationSeconds:F1}s Segments={segmentCount} First80={playlistContent[..Math.Min(80, playlistContent.Length)]}");
+            session.LastPlaylistWindowSeconds = windowSeconds;
+            session.LastPlaylistTargetDurationSeconds = targetDurationSeconds;
+
+            var rewritten = RewritePlaylist(playlistContent, resolved, session.SessionId, proxyBaseUrl);
+            session.LastPlaylistContent = rewritten;
+            session.LastPlaylistSourceUrl = resolved.FinalUrl;
+            session.LastPlaylistFetchedAt = DateTimeOffset.UtcNow;
+
+            return rewritten;
+        }
+        catch (Exception ex) when (!string.IsNullOrWhiteSpace(session.LastPlaylistContent))
+        {
+            // Keep the last playlist during provider throttling. The next request
+            // after this short cooldown may obtain a fresh token through redirects.
+            var age = DateTimeOffset.UtcNow - (session.LastPlaylistFetchedAt ?? DateTimeOffset.MinValue);
+            if (IsAuthenticationFailure(ex))
+                session.LastPlaylistFetchedAt = DateTimeOffset.UtcNow;
+            PluginLog.Warn($"[HLS] Fetch failed, serving stale cache (age={age.TotalSeconds:F0}s): {ex.Message}");
+            return session.LastPlaylistContent;
+        }
+        finally
+        {
+            session.PlaylistFetchLock.Release();
+        }
     }
 
-    private async Task<string> FetchPlaylistWithProxyRotationAsync(string playlistUrl, CancellationToken cancellationToken)
+    private static bool IsAuthenticationFailure(Exception ex) =>
+        ex is HttpRequestException { StatusCode: System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden };
+
+    /// <summary>
+    /// Pre-fetches a fresh playlist in the background when ~80% of the current window
+    /// has been consumed, so the next ffmpeg poll hits cache instead of making an upstream call.
+    /// </summary>
+    public async Task TryBackgroundRefreshPlaylistAsync(
+        StreamSession session,
+        string servedSegmentUrl,
+        string proxyBaseUrl,
+        CancellationToken ct)
     {
-        var directClient = _httpClientFactory.CreateClient("JellyTV");
-        HttpRequestException? lastAuthException = null;
-        Exception? lastException = null;
+        if (session.IsPlaylistRefreshInProgress) return;
+        if (session.LastPlaylistRefreshAttemptAt.HasValue
+            && DateTimeOffset.UtcNow - session.LastPlaylistRefreshAttemptAt.Value < TimeSpan.FromSeconds(10))
+            return;
 
-        for (var attempt = 1; attempt <= 4; attempt++)
+        var segments = session.LastPlaylistSegmentUrls;
+        if (segments is null || segments.Length == 0) return;
+
+        var window = session.LastPlaylistWindowSeconds;
+        if (!window.HasValue || window.Value <= 0) return;
+
+        var idx = Array.FindIndex(segments,
+            s => string.Equals(s, servedSegmentUrl, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        var targetDur = session.LastPlaylistTargetDurationSeconds ?? 2;
+        var consumedFraction = (idx + 1) * targetDur / window.Value;
+        if (consumedFraction < 0.8) return;
+
+        session.IsPlaylistRefreshInProgress = true;
+        session.LastPlaylistRefreshAttemptAt = DateTimeOffset.UtcNow;
+
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            var resolved = session.LastResolved;
+            if (resolved is null) return;
 
-            var (proxyKey, proxyClient) = _proxyPool.GetNextSegmentProxy();
-            var client = proxyClient ?? directClient;
+            var isTokenized = !string.IsNullOrWhiteSpace(resolved.TokenValue);
+            var fetchUrl = resolved.FinalUrl;
+            var (content, finalPlaylistUrl) = await FetchPlaylistWithProxyRotationAsync(fetchUrl, false, ct).ConfigureAwait(false);
+            UpdateResolvedFinalUrl(resolved, finalPlaylistUrl);
+            var (ws, ts) = AnalyzeMediaPlaylistWindow(content);
+            session.LastPlaylistWindowSeconds = ws;
+            session.LastPlaylistTargetDurationSeconds = ts;
+            session.LastPlaylistSegmentUrls = ExtractMediaSegmentUrls(content, resolved).ToArray();
+
+            var rewritten = RewritePlaylist(content, resolved, session.SessionId, proxyBaseUrl);
+            session.LastPlaylistContent = rewritten;
+            session.LastPlaylistSourceUrl = resolved.FinalUrl;
+            session.LastPlaylistFetchedAt = DateTimeOffset.UtcNow;
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"[HLS] BG refresh failed: {ex.Message}");
+        }
+        finally
+        {
+            session.IsPlaylistRefreshInProgress = false;
+        }
+    }
+
+    private static string[] ExtractMediaSegmentUrls(string playlistContent, ResolvedStream resolved)
+    {
+        var urls = new List<string>();
+        using var reader = new StringReader(playlistContent);
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            var t = line.Trim();
+            if (t.Length == 0 || t[0] == '#') continue;
+            if (t.Contains(".m3u8", StringComparison.OrdinalIgnoreCase)) continue;
+            urls.Add(ResolveUri(t, resolved.BaseUrl));
+        }
+        return urls.ToArray();
+    }
+
+    private async Task<(string Content, string FinalUrl)> FetchPlaylistWithProxyRotationAsync(string playlistUrl, bool isTokenized, CancellationToken cancellationToken)
+    {
+        // ponytail: use a fresh clean HttpClient. Shared cookies from the
+        // IHttpClientFactory accumulate state across sessions and cause 403
+        // from tuenisix even when the token is still valid (confirmed via curl).
+        using var cleanHandler = new SocketsHttpHandler
+        {
+            AllowAutoRedirect = true,
+            MaxAutomaticRedirections = 15,
+            UseCookies = false
+        };
+        using var fallbackClient = new HttpClient(cleanHandler, disposeHandler: false);
+        fallbackClient.Timeout = TimeSpan.FromSeconds(5);
+        fallbackClient.DefaultRequestHeaders.UserAgent.ParseAdd(
+            Plugin.Instance?.Configuration?.UserAgent ?? "Mozilla/5.0 (compatible; JellyTV/1.0)");
+
+        const int attempt = 1;
+        cancellationToken.ThrowIfCancellationRequested();
+
+            var (proxyKey, proxyClient) = isTokenized ? _proxyPool.GetNextSegmentProxy() : (null, null);
+            var client = proxyClient ?? fallbackClient;
+
+            PluginLog.Info($"[HLS] Fetch attempt {attempt} from {playlistUrl} proxy={proxyKey ?? "direct"} tokenized={isTokenized}");
 
             try
             {
@@ -97,11 +346,18 @@ public class HlsRewriterService
                 {
                     if ((int)response.StatusCode is 401 or 403)
                     {
-                        lastAuthException = new HttpRequestException(
+                        // Proxy 403 is usually CDN-blocking, not a token issue.
+                        // Mark failed and retry direct on next iteration.
+                        if (proxyKey is not null)
+                        {
+                            _proxyPool.MarkFailed(proxyKey);
+                            throw new HttpRequestException("Tokenized playlist proxy was rejected.", null, response.StatusCode);
+                        }
+
+                        throw new HttpRequestException(
                             $"Response status code does not indicate success: {(int)response.StatusCode} ({response.StatusCode}).",
                             null,
                             response.StatusCode);
-                        continue;
                     }
 
                     throw new HttpRequestException(
@@ -110,7 +366,8 @@ public class HlsRewriterService
                         response.StatusCode);
                 }
 
-                return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? playlistUrl;
+                return (await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false), finalUrl);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -119,31 +376,18 @@ public class HlsRewriterService
             }
             catch (HttpRequestException ex) when ((int?)ex.StatusCode is 401 or 403)
             {
-                lastAuthException = ex;
+                throw;
             }
             catch (HttpRequestException ex) when (proxyKey is not null && ex.StatusCode is null)
             {
                 _proxyPool.MarkFailed(proxyKey);
-                lastException = ex;
+                throw;
             }
             catch (Exception ex)
             {
-                lastException = ex;
                 _logger.LogWarning(ex, "[JellyTV] Playlist fetch attempt {Attempt} failed for {Url}", attempt, playlistUrl);
+                throw;
             }
-        }
-
-        if (lastAuthException is not null)
-        {
-            throw lastAuthException;
-        }
-
-        if (lastException is not null)
-        {
-            throw lastException;
-        }
-
-        throw new HttpRequestException($"Unable to fetch playlist from {playlistUrl} after proxy rotation attempts.");
     }
 
     private static (double? WindowSeconds, double? TargetDurationSeconds) AnalyzeMediaPlaylistWindow(string playlistText)
@@ -235,9 +479,19 @@ public class HlsRewriterService
         var sb = new StringBuilder();
         using var reader = new StringReader(content);
 
+        var addedLiveStart = false;
+
         string? line;
         while ((line = reader.ReadLine()) is not null)
         {
+            if (!addedLiveStart && line.StartsWith("#EXTM3U", StringComparison.Ordinal))
+            {
+                sb.AppendLine(line);
+                sb.AppendLine("#EXT-X-START:TIME-OFFSET=-3,PRECISE=YES");
+                addedLiveStart = true;
+                continue;
+            }
+
             if (line.StartsWith("#EXT-X-MEDIA:", StringComparison.OrdinalIgnoreCase))
             {
                 line = RewriteMediaTrack(line, resolved, sessionId, proxyBaseUrl);
@@ -567,6 +821,122 @@ public class HlsRewriterService
         var uri = new Uri(url);
         var last = uri.AbsolutePath.LastIndexOf('/');
         return $"{uri.Scheme}://{uri.Host}{(uri.IsDefaultPort ? string.Empty : $":{uri.Port}")}{(last >= 0 ? uri.AbsolutePath[..(last + 1)] : "/")}";
+    }
+
+    /// <summary>
+    /// Requests a fresh playlist from the token generator using the factory client
+    /// (automatic redirects + shared cookies). This replicates the initial resolve
+    /// chain, which is the only path the generator accepts reliably. Returns null
+    /// when the generator rejects the request (e.g. rate limit).
+    /// </summary>
+    private async Task<(string Content, string FinalUrl)?> TryRenewPlaylistViaGeneratorAsync(
+        StreamSession session,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var client = _httpClientFactory.CreateClient("JellyTV");
+            using var request = new HttpRequestMessage(HttpMethod.Get, session.TokenRenewalUrl!);
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                PluginLog.Warn($"[HLS] Generator rejected renewal with {(int)response.StatusCode}.");
+                return null;
+            }
+
+            var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? session.TokenRenewalUrl!;
+            var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+
+            if (session.LastResolved is { } resolved)
+            {
+                UpdateResolvedFinalUrl(resolved, finalUrl);
+            }
+
+            session.LastTokenRenewedAt = DateTimeOffset.UtcNow;
+            PluginLog.Info($"[HLS] Token renewed via generator; final={finalUrl}");
+            return (content, finalUrl);
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"[HLS] Generator renewal fetch failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static void InvalidatePlaylistCache(StreamSession session)
+    {
+        session.LastPlaylistContent = null;
+        session.LastPlaylistSourceUrl = null;
+        session.LastPlaylistFetchedAt = null;
+        session.LastPlaylistSegmentUrls = null;
+        session.LastPlaylistWindowSeconds = null;
+        session.LastPlaylistTargetDurationSeconds = null;
+    }
+
+    /// <summary>
+    /// Renueva el token re-resolviendo la cadena completa desde el origen (api -> alfa ->
+    /// tuenisix), el mismo camino con el que arranco la sesion. Mas fiable que golpear
+    /// alfa directamente cuando este rechaza la renovacion.
+    /// </summary>
+    private async Task<bool> TryReResolveOriginAsync(StreamSession session, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(session.UpstreamUrl))
+        {
+            return false;
+        }
+
+        try
+        {
+            var resolved = await _resolver.ResolveAsync(session.UpstreamUrl, ct).ConfigureAwait(false);
+            session.LastResolved = resolved;
+            session.TokenRenewalUrl = resolved.TokenGeneratorHopUrl;
+            session.LastTokenRenewedAt = DateTimeOffset.UtcNow;
+            session.IsInvalid = false;
+            InvalidatePlaylistCache(session);
+            PluginLog.Info($"[HLS] Origin re-resolved; final={resolved.FinalUrl}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"[HLS] Origin re-resolve failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static bool ShouldProactivelyRenew(StreamSession session) =>
+        session.ChannelType == 2
+        && session.LastTokenRenewedAt is { } last
+        && DateTimeOffset.UtcNow - last >= ProactiveRenewalInterval
+        && session.LastResolved is { TokenValue: not null and not "" };
+
+    private static void UpdateResolvedFinalUrl(ResolvedStream resolved, string finalUrl)
+    {
+        if (string.IsNullOrWhiteSpace(finalUrl) || !Uri.TryCreate(finalUrl, UriKind.Absolute, out var uri))
+            return;
+
+        resolved.FinalUrl = finalUrl;
+        resolved.BaseUrl = BuildBaseUrl(finalUrl);
+
+        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        foreach (var key in new[] { "token", "access_token", "auth", "t", "key", "sig", "tokenid" })
+        {
+            if (!string.IsNullOrWhiteSpace(query[key]))
+            {
+                resolved.TokenValue = query[key];
+                break;
+            }
+        }
+
+        foreach (var key in new[] { "expires", "exp", "expiry", "end", "validuntil", "token_expiry" })
+        {
+            if (long.TryParse(query[key], out var expiry))
+            {
+                resolved.TokenExpiry = DateTimeOffset.FromUnixTimeSeconds(expiry);
+                break;
+            }
+        }
     }
 
     private record struct TagAttribute(string Key, string Value, bool WasQuoted);

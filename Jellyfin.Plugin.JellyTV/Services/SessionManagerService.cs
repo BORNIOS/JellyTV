@@ -2,13 +2,14 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net.Http;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Models;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace JellyTV.Services;
+namespace Jellyfin.Plugin.JellyTV.Services;
 
 /// <summary>
 /// Manages active stream sessions and handles proactive token renewal
@@ -18,6 +19,7 @@ public class SessionManagerService : BackgroundService
 {
     private readonly ConcurrentDictionary<string, StreamSession> _sessions = new();
     private readonly ConcurrentDictionary<string, StreamSession> _sessionsById = new();
+    private readonly ConcurrentDictionary<string, Lazy<Task<StreamSession>>> _sessionCreations = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _resolveFailures = new();
     private readonly RedirectResolverService _resolver;
     private readonly ILogger<SessionManagerService> _logger;
@@ -40,15 +42,51 @@ public class SessionManagerService : BackgroundService
     }
 
     /// <summary>
+    /// Creates or retrieves a session for the given upstream URL (type-aware).
+    /// channelType: 0=Direct, 1=FAST, 2=TokenEphemeral, 3=TokenPermanent.
+    /// Direct/FAST channels skip the token-chain resolution for instant start.
+    /// </summary>
+    public Task<StreamSession> GetOrCreateSessionAsync(string upstreamUrl, int channelType, CancellationToken ct = default)
+    {
+        var lazy = _sessionCreations.GetOrAdd(
+            upstreamUrl,
+            key => new Lazy<Task<StreamSession>>(
+                () => CreateSessionAsync(key, channelType, ct),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+
+        return AwaitSessionCreationAsync(upstreamUrl, lazy);
+    }
+
+    /// <summary>
     /// Creates or retrieves a session for the given upstream URL.
     /// Follows redirects on creation to obtain the initial resolved stream.
+    /// (Backwards-compatible: full resolve, used by health checks.)
     /// </summary>
-    public async Task<StreamSession> GetOrCreateSessionAsync(string upstreamUrl, CancellationToken ct = default)
+    public Task<StreamSession> GetOrCreateSessionAsync(string upstreamUrl, CancellationToken ct = default)
+        => GetOrCreateSessionAsync(upstreamUrl, 2, ct);
+
+    private async Task<StreamSession> AwaitSessionCreationAsync(
+        string upstreamUrl,
+        Lazy<Task<StreamSession>> lazy)
+    {
+        try
+        {
+            return await lazy.Value.ConfigureAwait(false);
+        }
+        catch
+        {
+            _sessionCreations.TryRemove(
+                new KeyValuePair<string, Lazy<Task<StreamSession>>>(upstreamUrl, lazy));
+            throw;
+        }
+    }
+
+    private async Task<StreamSession> CreateSessionAsync(string upstreamUrl, int channelType, CancellationToken ct)
     {
         // Use URL as key so the same channel reuses its session
         var key = upstreamUrl;
 
-        if (_sessions.TryGetValue(key, out var existing))
+        if (_sessions.TryGetValue(key, out var existing) && !existing.IsInvalid)
         {
             // Validate the cached session's UpstreamUrl matches the requested key.
             // If they differ the session was corrupted by the old code that overwrote UpstreamUrl
@@ -78,10 +116,32 @@ public class SessionManagerService : BackgroundService
                 null, System.Net.HttpStatusCode.BadGateway);
         }
 
-        var session = new StreamSession { UpstreamUrl = upstreamUrl };
+        var session = new StreamSession { UpstreamUrl = upstreamUrl, ChannelType = channelType };
         try
         {
-            session.LastResolved = await _resolver.ResolveAsync(upstreamUrl, ct).ConfigureAwait(false);
+            if (channelType is 0 or 1)
+            {
+                // Directo/FAST: sin cadena de tokens — usar la URL tal cual para arranque instantaneo.
+                var isHls = upstreamUrl.Contains(".m3u8", StringComparison.OrdinalIgnoreCase);
+                session.LastResolved = new ResolvedStream
+                {
+                    OriginalUrl = upstreamUrl,
+                    FinalUrl = upstreamUrl,
+                    BaseUrl = BuildBaseUrl(upstreamUrl),
+                    IsHls = isHls,
+                    ContentType = isHls ? "application/vnd.apple.mpegurl" : string.Empty,
+                    ResolvedAt = DateTimeOffset.UtcNow,
+                    RedirectChain = [upstreamUrl]
+                };
+                session.LastTokenRenewedAt = DateTimeOffset.UtcNow;
+            }
+            else
+            {
+                session.LastResolved = await _resolver.ResolveAsync(upstreamUrl, ct).ConfigureAwait(false);
+                session.TokenRenewalUrl = session.LastResolved.TokenGeneratorHopUrl;
+                session.LastTokenRenewedAt = DateTimeOffset.UtcNow; // token emitido ahora
+            }
+
             _resolveFailures.TryRemove(key, out _); // clear any previous failure on success
         }
         catch (HttpRequestException ex) when ((int?)ex.StatusCode is not (401 or 403))
@@ -124,27 +184,39 @@ public class SessionManagerService : BackgroundService
     /// </summary>
     public async Task RenewSessionAsync(StreamSession session, CancellationToken ct = default)
     {
-        if (session.IsRenewing)
+        if (session.LastTokenRenewedAt is { } lastRenewed
+            && DateTimeOffset.UtcNow - lastRenewed < TimeSpan.FromSeconds(8))
         {
-            _logger.LogDebug("[JellyTV] Renewal already in progress for session {Id}", session.SessionId);
             return;
         }
 
-        // Guard: if this upstream recently failed, skip the HTTP call entirely
+        await session.RenewalLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (session.IsRenewing)
+                return;
+
+            if (session.LastTokenRenewedAt is { } completedRenewal
+                && DateTimeOffset.UtcNow - completedRenewal < TimeSpan.FromSeconds(8))
+                return;
+
+            await session.PlaylistFetchLock.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+
+            // Guard: if this upstream recently failed, skip the HTTP call entirely
         // so PollOnceAsync doesn't hammer the provider on a 4-5s ErrorBackoff loop.
         var url = session.UpstreamUrl;
-        if (_resolveFailures.TryGetValue(url, out var failedAt) &&
-            DateTimeOffset.UtcNow - failedAt < ResolveFailureBackoff)
-        {
+            if (_resolveFailures.TryGetValue(url, out var failedAt) &&
+                DateTimeOffset.UtcNow - failedAt < ResolveFailureBackoff)
+            {
             var remaining = (int)(ResolveFailureBackoff - (DateTimeOffset.UtcNow - failedAt)).TotalSeconds;
             _logger.LogWarning("[JellyTV] Session {Id} upstream in failure backoff ({Sec}s remaining), skipping renewal",
                 session.SessionId, remaining);
-            return;
-        }
+                return;
+            }
 
-        session.IsRenewing = true;
-        try
-        {
+            session.IsRenewing = true;
             if (Plugin.Instance?.Configuration.VerboseLogging == true)
             {
                 _logger.LogInformation("[JellyTV] Renewing token for session {Id} upstream={Url}",
@@ -156,81 +228,127 @@ public class SessionManagerService : BackgroundService
                     session.SessionId, session.UpstreamUrl);
             }
 
-            HttpRequestException? lastAuthException = null;
-            Exception? lastException = null;
-
-            foreach (var candidate in BuildRenewalCandidates(session))
+            if (!string.IsNullOrWhiteSpace(session.TokenRenewalUrl))
             {
-                try
+                var renewalUrl = session.TokenRenewalUrl;
+                var client = _resolver.CreateNoRedirectClient();
+                for (var attempt = 1; attempt <= 3; attempt++)
                 {
-                    var resolved = await _resolver.ResolveAsync(candidate, ct).ConfigureAwait(false);
-                    session.LastResolved = resolved;
-
-                    _resolveFailures.TryRemove(session.UpstreamUrl, out _);
-                    if (Plugin.Instance?.Configuration.VerboseLogging == true)
+                    try
                     {
-                        _logger.LogInformation("[JellyTV] Token renewed for session {Id}. Seed={Seed} Final={Url}",
-                            session.SessionId, candidate, resolved.FinalUrl);
+                        using var request = new HttpRequestMessage(HttpMethod.Get, renewalUrl);
+                        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                        var location = response.Headers.Location?.ToString();
+                        var metaRefresh = false;
+                        if (location is null && response.IsSuccessStatusCode &&
+                            response.Content.Headers.ContentType?.MediaType?.Contains("html", StringComparison.OrdinalIgnoreCase) == true)
+                        {
+                            var html = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                            location = RedirectResolverService.TryExtractMetaRefreshUrl(html, renewalUrl);
+                            metaRefresh = location is not null;
+                        }
+
+                        var nextUrl = ResolveUrl(renewalUrl, location);
+                        var token = nextUrl is null ? null : ExtractToken(nextUrl);
+                        if ((!metaRefresh && (int)response.StatusCode != 302) || nextUrl is null || token is null)
+                            throw new HttpRequestException($"Token renewal returned {(int)response.StatusCode} without a token redirect.", null, response.StatusCode);
+
+                        var old = session.LastResolved ?? throw new InvalidOperationException("Session has no resolution.");
+                        session.LastResolved = new ResolvedStream
+                        {
+                            OriginalUrl = old.OriginalUrl,
+                            FinalUrl = nextUrl,
+                            BaseUrl = BuildBaseUrl(nextUrl),
+                            ContentType = old.ContentType,
+                            IsHls = old.IsHls,
+                            TokenValue = token,
+                            TokenExpiry = ParseExpiry(nextUrl) ?? DateTimeOffset.UtcNow.AddSeconds(12),
+                            PlaylistPollUrl = renewalUrl,
+                            TokenGeneratorHopUrl = renewalUrl,
+                            ResolvedAt = DateTimeOffset.UtcNow,
+                            RedirectChain = old.RedirectChain,
+                            ResolverProxyKey = old.ResolverProxyKey
+                        };
+                        session.IsInvalid = false;
+                        session.LastTokenRenewedAt = DateTimeOffset.UtcNow;
+                        InvalidatePlaylistCache(session);
+                        _resolveFailures.TryRemove(session.UpstreamUrl, out _);
+                        _logger.LogDebug("[JellyTV] Token renewal succeeded for session {Id}, attempt={Attempt}, generator={Generator}", session.SessionId, attempt, renewalUrl);
+                        return;
                     }
-                    else
+                    catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
                     {
-                        _logger.LogDebug("[JellyTV] Token renewed for session {Id}. Seed={Seed} Final={Url}",
-                            session.SessionId, candidate, resolved.FinalUrl);
+                        _logger.LogDebug(ex, "[JellyTV] Token renewal attempt {Attempt}/3 failed for session {Id}", attempt, session.SessionId);
+                        if (attempt < 3)
+                            await Task.Delay(TimeSpan.FromMilliseconds(150 * Math.Pow(2, attempt - 1)), ct).ConfigureAwait(false);
                     }
-                    return;
-                }
-                catch (HttpRequestException ex) when ((int?)ex.StatusCode is 401 or 403)
-                {
-                    lastAuthException = ex;
-                    _logger.LogWarning("[JellyTV] Renewal auth-failed for session {Id} using seed {Seed} (status={Status})",
-                        session.SessionId, candidate, (int?)ex.StatusCode);
-                }
-                catch (Exception ex)
-                {
-                    lastException = ex;
-                    _logger.LogWarning(ex, "[JellyTV] Renewal attempt failed for session {Id} using seed {Seed}",
-                        session.SessionId, candidate);
                 }
             }
 
-            // If every attempt failed with auth errors, apply backoff and do not throw.
-            // Throwing here creates tight exception loops in BroadcastPump and floods logs.
-            if (lastAuthException is not null && lastException is null)
+            _logger.LogWarning("[JellyTV] Direct token renewal exhausted for session {Id}; re-resolving origin", session.SessionId);
+            var resolved = await _resolver.ResolveAsync(session.UpstreamUrl, ct).ConfigureAwait(false);
+            session.LastResolved = resolved;
+            session.TokenRenewalUrl = resolved.TokenGeneratorHopUrl;
+            session.IsInvalid = false;
+            session.LastTokenRenewedAt = DateTimeOffset.UtcNow;
+            InvalidatePlaylistCache(session);
+            _resolveFailures.TryRemove(session.UpstreamUrl, out _);
+            }
+            finally
             {
-                _resolveFailures[session.UpstreamUrl] = DateTimeOffset.UtcNow;
-                _logger.LogWarning("[JellyTV] Renewal exhausted auth candidates for session {Id}; entering backoff {Sec}s",
-                    session.SessionId, (int)ResolveFailureBackoff.TotalSeconds);
-                return;
+                session.PlaylistFetchLock.Release();
             }
-
-            if (lastException is not null)
-            {
-                throw lastException;
-            }
-
-            // Defensive fallback (no candidate succeeded but no explicit exception captured).
-            _resolveFailures[session.UpstreamUrl] = DateTimeOffset.UtcNow;
-            _logger.LogWarning("[JellyTV] Renewal produced no result for session {Id}; entering backoff {Sec}s",
-                session.SessionId, (int)ResolveFailureBackoff.TotalSeconds);
-            return;
         }
-        catch (HttpRequestException ex) when ((int?)ex.StatusCode is not (401 or 403))
+        catch
         {
-            // Non-auth failure — record backoff to prevent tight retry loops.
+            session.IsInvalid = true;
             _resolveFailures[session.UpstreamUrl] = DateTimeOffset.UtcNow;
-            _logger.LogError(ex, "[JellyTV] Token renewal failed for session {Id} (status={Status}), backoff {Sec}s",
-                session.SessionId, (int?)ex.StatusCode, (int)ResolveFailureBackoff.TotalSeconds);
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[JellyTV] Token renewal failed for session {Id}", session.SessionId);
             throw;
         }
         finally
         {
             session.IsRenewing = false;
+            session.RenewalLock.Release();
         }
+    }
+
+    private static void InvalidatePlaylistCache(StreamSession session)
+    {
+        session.LastPlaylistContent = null;
+        session.LastPlaylistSourceUrl = null;
+        session.LastPlaylistFetchedAt = null;
+        session.LastPlaylistSegmentUrls = null;
+        session.LastPlaylistWindowSeconds = null;
+        session.LastPlaylistTargetDurationSeconds = null;
+    }
+
+    private static string? ResolveUrl(string baseUrl, string? location) =>
+        location is null ? null : (Uri.TryCreate(new Uri(baseUrl), location, out var uri) && uri.Scheme is "http" or "https" ? uri.ToString() : null);
+
+    private static string? ExtractToken(string url)
+    {
+        var uri = new Uri(url);
+        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        foreach (var key in new[] { "token", "access_token", "auth", "t", "key", "sig", "tokenid" })
+            if (!string.IsNullOrWhiteSpace(query[key])) return query[key];
+        var match = Regex.Match(uri.AbsolutePath, @"/hlsr/([^/?#]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    private static DateTimeOffset? ParseExpiry(string url)
+    {
+        var query = System.Web.HttpUtility.ParseQueryString(new Uri(url).Query);
+        foreach (var key in new[] { "expires", "exp", "expiry", "end", "validuntil", "token_expiry" })
+            if (long.TryParse(query[key], out var value)) return DateTimeOffset.FromUnixTimeSeconds(value);
+        return null;
+    }
+
+    private static string BuildBaseUrl(string url)
+    {
+        var uri = new Uri(url);
+        var path = uri.AbsolutePath;
+        var slash = path.LastIndexOf('/');
+        return $"{uri.Scheme}://{uri.Host}{(uri.IsDefaultPort ? string.Empty : $":{uri.Port}")}{path[..(slash + 1)]}";
     }
 
     /// <summary>
@@ -283,24 +401,8 @@ public class SessionManagerService : BackgroundService
     /// </summary>
     public bool NeedsRenewal(StreamSession session)
     {
-        var resolved = session.LastResolved;
-        if (resolved is null) return true;
-
-        // Tokenized URLs are renewed by the dynamic HLS window strategy in controller logic.
-        if (!string.IsNullOrWhiteSpace(resolved.TokenValue))
-        {
-            return false;
-        }
-
-        // If we have an explicit expiry, use it
-        if (resolved.TokenExpiry.HasValue)
-        {
-            return DateTimeOffset.UtcNow >= resolved.TokenExpiry.Value;
-        }
-
-        // No expiry metadata:
-        // - Streams without token should not be renewed proactively.
-        // - Tokenized streams will renew reactively on 401/403 and/or via broadcast-estimated expiry.
+        // The provider owns token rotation. A new playlist request follows the
+        // generator redirect and receives the current token automatically.
         return false;
     }
 

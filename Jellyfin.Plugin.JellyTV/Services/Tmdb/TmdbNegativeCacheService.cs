@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 
-namespace JellyTV.Services.Tmdb;
+namespace Jellyfin.Plugin.JellyTV.Services.Tmdb;
 
 public sealed class NegativeCacheEntry
 {

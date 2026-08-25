@@ -1,4 +1,4 @@
-namespace JellyTV.Services.Tmdb;
+namespace Jellyfin.Plugin.JellyTV.Services.Tmdb;
 
 /// <summary>
 /// Rich metadata extracted inline from a single &lt;programme&gt; element while streaming

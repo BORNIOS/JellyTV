@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-namespace JellyTV.Services.Tmdb;
+namespace Jellyfin.Plugin.JellyTV.Services.Tmdb;
 
 public sealed class EnrichmentRunSummary
 {

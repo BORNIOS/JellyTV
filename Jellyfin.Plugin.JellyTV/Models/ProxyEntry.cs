@@ -1,6 +1,6 @@
 using System;
 
-namespace JellyTV.Models;
+namespace Jellyfin.Plugin.JellyTV.Models;
 
 public class ProxyEntry
 {

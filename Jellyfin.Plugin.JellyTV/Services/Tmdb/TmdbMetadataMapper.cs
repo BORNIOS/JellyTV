@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace JellyTV.Services.Tmdb;
+namespace Jellyfin.Plugin.JellyTV.Services.Tmdb;
 
 internal interface ITmdbMetadataMapper
 {

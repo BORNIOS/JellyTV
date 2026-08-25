@@ -10,10 +10,10 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using JellyTV.Services.Tmdb;
+using Jellyfin.Plugin.JellyTV.Services.Tmdb;
 using Microsoft.Extensions.Logging;
 
-namespace JellyTV.Services;
+namespace Jellyfin.Plugin.JellyTV.Services;
 
 /// <summary>
 /// Orchestrates TMDB enrichment for uncached EPG programmes.

@@ -3,9 +3,9 @@ using System.Collections.Concurrent;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Models;
 
-namespace JellyTV.Services;
+namespace Jellyfin.Plugin.JellyTV.Services;
 
 /// <summary>
 /// Round-robin HTTPS proxy pool for chain resolution requests.

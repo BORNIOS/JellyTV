@@ -9,7 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
-namespace JellyTV.Services.Tmdb;
+namespace Jellyfin.Plugin.JellyTV.Services.Tmdb;
 
 internal sealed class TmdbClientMetrics
 {

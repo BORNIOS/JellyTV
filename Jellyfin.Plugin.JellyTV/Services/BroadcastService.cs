@@ -9,9 +9,9 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Models;
 
-namespace JellyTV.Services;
+namespace Jellyfin.Plugin.JellyTV.Services;
 
 /// <summary>
 /// Manages per-channel broadcast pumps that independently download HLS segments

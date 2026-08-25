@@ -1,12 +1,13 @@
 using System;
 using System.Net.Http;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Models;
 using Microsoft.Extensions.Logging;
 
-namespace JellyTV.Services;
+namespace Jellyfin.Plugin.JellyTV.Services;
 
 /// <summary>
 /// Resolves IPTV URLs by following HTTP redirects to obtain the final playback URL.
@@ -53,12 +54,8 @@ public class RedirectResolverService
         // Strategy similar to robust player clients:
         // 1) Try automatic redirect handling first (browser-like behavior + shared cookies).
         // 2) Fallback to manual redirect walk for full diagnostics/control.
-        var autoResolved = await TryResolveWithAutoRedirectAsync(originalUrl, proxyAutoRedirect, cancellationToken).ConfigureAwait(false);
-        if (autoResolved is not null)
-        {
-            autoResolved.ResolverProxyKey = proxyKey;
-            return autoResolved;
-        }
+        // The manual walk is required here because automatic redirects discard
+        // the intermediate hop that emitted a short-lived token.
 
         // Use a client that does NOT auto-follow redirects so we can track them.
         // directClient is always the factory fallback; proxyClient may be null.
@@ -142,6 +139,29 @@ public class RedirectResolverService
                 continue;
             }
 
+            if (response.IsSuccessStatusCode && contentType.Contains("html", StringComparison.OrdinalIgnoreCase))
+            {
+                var html = await ReadLimitedBodyAsync(response, cancellationToken).ConfigureAwait(false);
+                var metaUrl = TryExtractMetaRefreshUrl(html, currentUrl);
+                if (metaUrl is not null)
+                {
+                    if (IsRotationSignal(metaUrl))
+                        rotationNodeUrl = currentUrl;
+
+                    _logger.LogDebug("[JellyTV] Meta refresh {Count}: {From} -> {To}", redirectCount + 1, currentUrl, metaUrl);
+                    redirectChain.Add(metaUrl);
+                    currentUrl = metaUrl;
+                    redirectCount++;
+                    response.Dispose();
+                    continue;
+                }
+
+                if (IsHlsUrl(currentUrl, contentType))
+                    initialPlaylistContent = html;
+                response.Dispose();
+                break;
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 // Some providers return 401/403 for specific proxy egress IPs on intermediate hops
@@ -169,16 +189,15 @@ public class RedirectResolverService
                 throw new HttpRequestException($"Response status code does not indicate success: {(int)status} ({status}).", null, status);
             }
 
-            // Read the body on the final 200 step so the BroadcastPump can reuse it
-            // without making a second GET.  Many IPTV providers apply a per-token
-            // rate-limit (effectively single-use per window), so a redundant fetch
-            // immediately after resolution returns 403 and causes a ~52-second 403 loop.
+            // ponytail: don't read the body for tokenized streams — it consumes
+            // the single-use token that HlsRewriterService needs for the first fetch.
             string? resolverBodyText = null;
             var ct2 = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
-            if (IsHlsUrl(currentUrl, ct2))
+            var isTokenized = !string.IsNullOrEmpty(TryExtractTokenFromUrl(currentUrl));
+            if (!isTokenized && IsHlsUrl(currentUrl, ct2))
             {
                 try { resolverBodyText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false); }
-                catch { /* non-fatal — pump will fetch normally */ }
+                catch { /* non-fatal */ }
             }
             response.Dispose();
             initialPlaylistContent = resolverBodyText;
@@ -211,6 +230,7 @@ public class RedirectResolverService
             OriginalUrl = originalUrl,
             FinalUrl = currentUrl,
             PlaylistPollUrl = playlistPollUrl,
+            TokenGeneratorHopUrl = rotationNodeUrl,
             BaseUrl = baseUrl,
             ContentType = contentType,
             IsHls = isHls,
@@ -252,6 +272,38 @@ public class RedirectResolverService
         return resolved;
     }
 
+    internal HttpClient CreateNoRedirectClient() => _httpClientFactory.CreateClient("IptvNoRedirect");
+
+    internal static string? TryExtractMetaRefreshUrl(string html, string baseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(html) || html.Length > 64 * 1024)
+            return null;
+
+        var match = Regex.Match(html,
+            "<meta\\b[^>]*http-equiv\\s*=\\s*[\\\"']?refresh[\\\"']?[^>]*content\\s*=\\s*[\\\"']?[^>]*?url\\s*=\\s*[\\\"']?([^\\\"' >]+)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            match = Regex.Match(html,
+                "<meta\\b[^>]*content\\s*=\\s*[\\\"']?[^>]*?url\\s*=\\s*[\\\"']?([^\\\"' >]+)[^>]*http-equiv\\s*=\\s*[\\\"']?refresh",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+
+        if (!match.Success || !Uri.TryCreate(new Uri(baseUrl), match.Groups[1].Value.Trim(), out var uri))
+            return null;
+
+        return uri.Scheme is "http" or "https" ? uri.ToString() : null;
+    }
+
+    private static async Task<string> ReadLimitedBodyAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        if (response.Content.Headers.ContentLength is > 64 * 1024)
+            return string.Empty;
+
+        var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        return body.Length <= 64 * 1024 ? body : body[..(64 * 1024)];
+    }
+
     private async Task<ResolvedStream?> TryResolveWithAutoRedirectAsync(
         string originalUrl,
         HttpClient? proxyClient,
@@ -280,19 +332,11 @@ public class RedirectResolverService
 
             var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? originalUrl;
             var contentType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
-            string? initialPlaylistContent = null;
 
-            if (IsHlsUrl(finalUrl, contentType))
-            {
-                try
-                {
-                    initialPlaylistContent = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-                }
-                catch
-                {
-                    // Non-fatal, plugin can fetch playlist later.
-                }
-            }
+            // ponytail: don't read the response body. For tokenized streams the
+            // token is single-use and ReadAsStringAsync consumes it. The playlist
+            // is fetched separately by HlsRewriterService after resolution.
+            // The old BroadcastPump (dead code) was the only consumer of this.
 
             var redirectChain = new List<string> { originalUrl };
             if (!string.Equals(finalUrl, originalUrl, StringComparison.Ordinal))
@@ -312,7 +356,7 @@ public class RedirectResolverService
                 TokenValue = TryExtractTokenFromUrl(finalUrl),
                 ResolvedAt = DateTimeOffset.UtcNow,
                 RedirectChain = redirectChain,
-                InitialPlaylistContent = initialPlaylistContent,
+                InitialPlaylistContent = null,
                 ResolverProxyKey = null,
             };
 
@@ -366,6 +410,10 @@ public class RedirectResolverService
                     return v;
                 }
             }
+
+            var hlsr = Regex.Match(uri.AbsolutePath, @"/hlsr/([^/?#]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (hlsr.Success)
+                return hlsr.Groups[1].Value;
         }
         catch (Exception ex)
         {

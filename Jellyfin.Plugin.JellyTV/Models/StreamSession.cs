@@ -2,7 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 
-namespace JellyTV.Models;
+namespace Jellyfin.Plugin.JellyTV.Models;
 
 /// <summary>
 /// Represents a resolved IPTV stream with its final URL and token metadata.
@@ -82,6 +82,11 @@ public class ResolvedStream
     /// Proxy key used for the successful resolve chain (Host:Port), when resolution used proxy.
     /// </summary>
     public string? ResolverProxyKey { get; set; }
+
+    /// <summary>
+    /// URL of the hop whose redirect emitted the token.
+    /// </summary>
+    public string? TokenGeneratorHopUrl { get; set; }
 }
 
 /// <summary>
@@ -109,6 +114,22 @@ public class StreamSession
     /// Gets or sets the original upstream URL.
     /// </summary>
     public string UpstreamUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the channel type: 0=Direct, 1=FAST, 2=TokenEphemeral, 3=TokenPermanent.
+    /// Determines whether the session resolves a token chain and renews tokens.
+    /// </summary>
+    public int ChannelType { get; set; }
+
+    /// <summary>
+    /// URL of the redirect hop that generates the short-lived token.
+    /// </summary>
+    public string? TokenRenewalUrl { get; set; }
+
+    /// <summary>
+    /// Indicates that direct renewal and full re-resolution both failed.
+    /// </summary>
+    public bool IsInvalid { get; set; }
 
     /// <summary>
     /// Gets or sets the last resolved stream information.
@@ -142,6 +163,21 @@ public class StreamSession
     public double? LastPlaylistTargetDurationSeconds { get; set; }
 
     /// <summary>
+    /// Absolute upstream segment URLs for the last fetched playlist.
+    /// </summary>
+    public string[]? LastPlaylistSegmentUrls { get; set; }
+
+    /// <summary>
+    /// Timestamp of the last attempted background playlist refresh.
+    /// </summary>
+    public DateTimeOffset? LastPlaylistRefreshAttemptAt { get; set; }
+
+    /// <summary>
+    /// Indicates whether a background playlist refresh is currently running.
+    /// </summary>
+    public bool IsPlaylistRefreshInProgress { get; set; }
+
+    /// <summary>
     /// History of recent resolved streams (keeps last resolutions). Entries older than the configured retention
     /// period should be pruned by the manager; stored here for quick access and diagnostics.
     /// </summary>
@@ -168,9 +204,32 @@ public class StreamSession
     public DateTimeOffset? LastForcedRenewalAt { get; set; }
 
     /// <summary>
+    /// Last token renewal completed for this session.
+    /// </summary>
+    public DateTimeOffset? LastTokenRenewedAt { get; set; }
+
+    /// <summary>
+    /// Last token renewal attempt (successful or not) for this session.
+    /// </summary>
+    public DateTimeOffset? LastTokenRenewalAttemptAt { get; set; }
+
+    /// <summary>
     /// Gets or sets whether a token renewal is currently in progress.
     /// </summary>
     public bool IsRenewing { get; set; }
+
+    /// <summary>
+    /// Serializes token renewal and publication of a complete resolution.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public SemaphoreSlim RenewalLock { get; } = new SemaphoreSlim(1, 1);
+
+    /// <summary>
+    /// Lock to prevent concurrent playlist fetches (ffmpeg + browser race condition).
+    /// Ensures only one upstream request to the token-generating rotation node at a time.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public SemaphoreSlim PlaylistFetchLock { get; } = new SemaphoreSlim(1, 1);
 
     /// <summary>
     /// Directory to store downloaded segments and concat artifacts for this session.

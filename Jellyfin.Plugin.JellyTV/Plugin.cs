@@ -5,18 +5,27 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using JellyTV.Configuration;
-using JellyTV.Services;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using Jellyfin.Plugin.JellyTV.Configuration;
+using Jellyfin.Plugin.JellyTV.Services;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Controller.LiveTv;
+using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.LiveTv;
+using MediaBrowser.Model.MediaInfo;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
 using Microsoft.Extensions.Logging;
 
-namespace JellyTV;
+namespace Jellyfin.Plugin.JellyTV;
 
+/// <summary>
+/// JellyTV plugin — manages individual TV channels and injects them directly
+/// into Jellyfin Live TV via <see cref="ILiveTvService"/>, bypassing the M3U tuner.
+/// </summary>
 public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
     public static Plugin? Instance { get; private set; }
@@ -24,41 +33,28 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public RedirectResolverService RedirectResolver { get; }
     public HlsRewriterService HlsRewriter { get; }
     public SessionManagerService SessionManager { get; }
-    public M3uAggregatorService M3uAggregator { get; }
     public ChannelHealthCheckService ChannelHealthCheck { get; }
     public WorkerReporterService WorkerReporter { get; }
     public EpgFilterService EpgFilter { get; }
     public TmdbEnrichmentService TmdbEnrichment { get; }
 
-    // Exposed for scheduled tasks
     public IHttpClientFactory HttpClientFactory { get; }
 
-    // Jellyfin tuner host manager -- used to auto-register the proxy tuner host
-    private readonly ITunerHostManager _tunerHostManager;
+    /// <summary>Base URL of the Jellyfin server, set on first access.</summary>
+    public string? KnownBaseUrl { get; set; }
 
-    // GUID fijo (formato "N" = 32 hex sin guiones, igual al que usa Guid.NewGuid().ToString("N")).
-    // Jellyfin usa el Id para decidir update-vs-insert en SaveTunerHost, garantizando upsert idempotente.
-    private const string TunerGuid = "f8a3c1d79b2e4a5f8c6d3e1b7f4a2d9d";
-    private readonly object _tunerRegistrationSync = new();
-    private bool _tunerRegistered;
-    private DateTimeOffset _nextTunerAttemptUtc = DateTimeOffset.MinValue;
-
-    /// <summary>
-    /// Base URL of the Jellyfin server, populated on the first /m3u request.
-    /// Used by scheduled tasks that need to construct proxy URLs.
-    /// </summary>
-    public string? KnownBaseUrl { get; private set; }
-
+    // ══ BasePlugin overrides ════════════════════════════════════════════
     public override string Name => "JellyTV";
     public override Guid Id => Guid.Parse("f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c");
-    public override string Description => "Manages IPTV sources with automatic token renewal.";
+    public override string Description => "TV channel manager with automatic token renewal for IPTV streams.";
+
+    // ══ Constructor ════════════════════════════════════════════════════
 
     public Plugin(
         IApplicationPaths applicationPaths,
         IXmlSerializer xmlSerializer,
         IHttpClientFactory httpClientFactory,
-        ILoggerFactory loggerFactory,
-        ITunerHostManager tunerHostManager)
+        ILoggerFactory loggerFactory)
         : base(applicationPaths, xmlSerializer)
     {
         ConfigureLogDirectory(applicationPaths);
@@ -75,7 +71,6 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         }
 
         Instance = this;
-        _tunerHostManager = tunerHostManager;
         HttpClientFactory = httpClientFactory;
 
         try
@@ -86,9 +81,8 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
             var proxyPool = new ProxyPoolService(Configuration?.UserAgent ?? "JellyTV/1.0");
             RedirectResolver = new RedirectResolverService(localFactory, loggerFactory.CreateLogger<RedirectResolverService>(), proxyPool);
-            HlsRewriter      = new HlsRewriterService(localFactory, proxyPool, loggerFactory.CreateLogger<HlsRewriterService>());
+            HlsRewriter      = new HlsRewriterService(localFactory, proxyPool, RedirectResolver, loggerFactory.CreateLogger<HlsRewriterService>());
             SessionManager   = new SessionManagerService(RedirectResolver, loggerFactory.CreateLogger<SessionManagerService>());
-            M3uAggregator    = new M3uAggregatorService(localFactory,     loggerFactory.CreateLogger<M3uAggregatorService>());
             ChannelHealthCheck = new ChannelHealthCheckService(localFactory, loggerFactory.CreateLogger<ChannelHealthCheckService>(), SessionManager, applicationPaths);
             WorkerReporter    = new WorkerReporterService(localFactory, loggerFactory.CreateLogger<WorkerReporterService>());
             EpgFilter         = new EpgFilterService(localFactory, loggerFactory.CreateLogger<EpgFilterService>());
@@ -141,70 +135,6 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         if (!string.IsNullOrWhiteSpace(commonAppData))
         {
             yield return Path.Combine(commonAppData, "Jellyfin", "Server", "log");
-        }
-    }
-
-    /// <summary>
-    /// Registers (or updates) a single M3U tuner in Jellyfin pointing to
-    /// /JellyTV/m3u so the Live TV section auto-populates from our sources.
-    /// Call this after Jellyfin is fully started (e.g., from the /m3u endpoint on first hit).
-    /// </summary>
-    public void EnsureTunerRegistered(string jellyfinBaseUrl)
-    {
-        if (Configuration?.AutoRegisterTuner != true) return;
-
-        if (_tunerRegistered || DateTimeOffset.UtcNow < _nextTunerAttemptUtc)
-        {
-            return;
-        }
-
-        // Evita ráfagas de intentos simultáneos cuando /m3u recibe muchas solicitudes.
-        if (!System.Threading.Monitor.TryEnter(_tunerRegistrationSync))
-        {
-            return;
-        }
-
-        try
-        {
-            if (_tunerRegistered || DateTimeOffset.UtcNow < _nextTunerAttemptUtc)
-            {
-                return;
-            }
-
-            // SaveTunerHost en Jellyfin hace upsert basado en Id: si ya existe un
-            // TunerHostInfo con el mismo Id lo actualiza; si no, lo inserta.
-            // Usar un Id constante garantiza que cada reinicio actualiza el registro
-            // existente en lugar de crear un duplicado. ITunerHostManager.TunerHosts
-            // devuelve ITunerHost (solo Name/Type), no TunerHostInfo, por lo que no
-            // es posible detectar de forma fiable la URL/FriendlyName del tuner existente.
-            KnownBaseUrl = jellyfinBaseUrl;
-            var tunerUrl = $"{jellyfinBaseUrl}/JellyTV/m3u";
-            var tuner = new TunerHostInfo
-            {
-                Id           = TunerGuid,
-                Type         = "m3u",
-                Url          = tunerUrl,
-                FriendlyName = "JellyTV (auto)",
-                Source       = "JellyTV Plugin",
-                // For Jellyfin's M3U tuner host, TunerCount == 0 keeps the source
-                // eligible for direct play instead of treating it like a managed
-                // finite-tuner source that is funneled through the live TV pipeline.
-                TunerCount   = 0
-            };
-
-            _tunerHostManager.SaveTunerHost(tuner, true).GetAwaiter().GetResult();
-            _tunerRegistered = true;
-            PluginLog.Info($"[TUNER] Tuner registrado/actualizado → {tunerUrl}");
-        }
-        catch (Exception ex)
-        {
-            // Evita reintentos continuos cuando Jellyfin aún no está listo.
-            _nextTunerAttemptUtc = DateTimeOffset.UtcNow.AddMinutes(2);
-            PluginLog.Error("[TUNER] Failed to register/update tuner", ex);
-        }
-        finally
-        {
-            System.Threading.Monitor.Exit(_tunerRegistrationSync);
         }
     }
 

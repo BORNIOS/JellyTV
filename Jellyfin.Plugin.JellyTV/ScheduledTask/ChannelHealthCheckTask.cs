@@ -3,11 +3,11 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using JellyTV.Services;
+using Jellyfin.Plugin.JellyTV.Services;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
-namespace JellyTV.ScheduledTask;
+namespace Jellyfin.Plugin.JellyTV.ScheduledTask;
 
 /// <summary>
 /// Scheduled task that performs health checks on all configured channels from all IPTV sources.
@@ -37,7 +37,7 @@ public class ChannelHealthCheckTask : IScheduledTask
         {
             var config = Plugin.Instance?.Configuration;
             var healthCheck = Plugin.Instance?.ChannelHealthCheck;
-            if (config is null || config.Sources.Count == 0)
+            if (config is null || config.Channels.Count == 0)
             {
                 PluginLog.Warn("[HEALTH-TASK] No sources configured, skipping health check.");
                 return;
@@ -49,81 +49,51 @@ public class ChannelHealthCheckTask : IScheduledTask
                 return;
             }
 
-            var enabledSources = config.Sources.Where(s => s.IsEnabled).ToList();
-            if (!enabledSources.Any())
+            var enabledChannels = config.Channels.Where(c => c.IsEnabled && !string.IsNullOrWhiteSpace(c.Url)).ToList();
+            if (!enabledChannels.Any())
             {
-                PluginLog.Info("[HEALTH-TASK] No enabled sources, skipping health check.");
+                PluginLog.Info("[HEALTH-TASK] No enabled channels, skipping health check.");
                 return;
             }
 
-            var totalChannels = 0;
-            var progressIncrement = 1.0 / enabledSources.Count;
+            var totalChannels = enabledChannels.Count;
+            var progressIncrement = 1.0 / totalChannels;
             var currentProgress = 0.0;
 
-            foreach (var source in enabledSources)
+            // Check each channel directly
+            var channelUrls = enabledChannels.Select(c => (c.Name, c.Url, c.Type)).ToList();
+            var results = await healthCheck.CheckSourceChannelsAsync("all", channelUrls, cancellationToken).ConfigureAwait(false);
+
+            var alive = results.Count(r => r.IsAlive);
+            var dead = results.Count - alive;
+
+            // Update channel health status in config
+            foreach (var ch in enabledChannels)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if (string.IsNullOrWhiteSpace(source.Url))
+                var result = results.FirstOrDefault(r => r.ChannelUrl == ch.Url);
+                if (result is not null)
                 {
-                    currentProgress += progressIncrement;
-                    progress.Report(currentProgress);
-                    continue;
+                    ch.LastCheckAlive = result.IsAlive;
+                    ch.LastCheckedAt = DateTimeOffset.UtcNow;
+                    ch.LastCheckError = result.ErrorMessage;
                 }
+            }
 
-                PluginLog.Info($"[HEALTH-TASK] Processing source: {source.Name}");
+            try { Plugin.Instance?.SaveConfiguration(); } catch { }
 
-                try
-                {
-                    // Parse M3U to extract channels
-                    // This is simplified — assumes M3U format with #EXTINF lines
-                    var channels = await ParseM3uChannelsAsync(source.Url, cancellationToken).ConfigureAwait(false);
-                    if (!channels.Any())
-                    {
-                        PluginLog.Warn($"[HEALTH-TASK] No channels found in source {source.Name}");
-                        currentProgress += progressIncrement;
-                        progress.Report(currentProgress);
-                        continue;
-                    }
+            PluginLog.Info($"[HEALTH-TASK] Health check complete: {alive}/{totalChannels} canales vivos");
 
-                    // Perform health checks
-                    var results = await healthCheck.CheckSourceChannelsAsync(
-                        source.Id,
-                        channels,
-                        cancellationToken).ConfigureAwait(false);
+            // Report results to the Cloudflare Worker for automatic failover
+            var reporter = Plugin.Instance?.WorkerReporter;
+            if (reporter is not null)
+            {
+                await reporter.ReportAsync(results, cancellationToken).ConfigureAwait(false);
+            }
 
-                    var alive = results.Count(r => r.IsAlive);
-                    var dead = results.Count - alive;
-
-                    PluginLog.Info($"[HEALTH-TASK] Source '{source.Name}': {alive}/{results.Count} canales vivos");
-
-                    // Report results to the Cloudflare Worker for automatic failover
-                    var reporter = Plugin.Instance?.WorkerReporter;
-                    if (reporter is not null)
-                    {
-                        await reporter.ReportAsync(results, cancellationToken).ConfigureAwait(false);
-                    }
-
-                    if (dead > 0)
-                    {
-                        var deadChannels = string.Join(", ", results.Where(r => !r.IsAlive).Select(r => r.ChannelName).Take(5));
-                        PluginLog.Warn($"[HEALTH-TASK] Dead channels: {deadChannels} {(results.Count(r => !r.IsAlive) > 5 ? "..." : "")}");
-                    }
-
-                    totalChannels += results.Count;
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "[HEALTH-TASK] Error processing source {Name}", source.Name);
-                    PluginLog.Error($"[HEALTH-TASK] Error in source {source.Name}: {ex.Message}", ex);
-                }
-
-                currentProgress += progressIncrement;
-                progress.Report(currentProgress);
+            if (dead > 0)
+            {
+                var deadChannels = string.Join(", ", results.Where(r => !r.IsAlive).Select(r => r.ChannelName).Take(5));
+                PluginLog.Warn($"[HEALTH-TASK] Dead channels: {deadChannels} {(results.Count(r => !r.IsAlive) > 5 ? "..." : "")}");
             }
 
             progress.Report(1.0);

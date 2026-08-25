@@ -1,10 +1,11 @@
-using JellyTV.ScheduledTask;
+using Jellyfin.Plugin.JellyTV.ScheduledTask;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Plugins;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace JellyTV;
+namespace Jellyfin.Plugin.JellyTV;
 
 /// <summary>
 /// Registers plugin services with the Jellyfin DI container.
@@ -16,5 +17,6 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
     {
         serviceCollection.AddSingleton<IScheduledTask, SourceSyncTask>();
         serviceCollection.AddSingleton<IScheduledTask, ChannelHealthCheckTask>();
+        serviceCollection.AddSingleton<ILiveTvService, JellyTVLiveTvService>();
     }
 }

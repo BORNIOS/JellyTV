@@ -8,11 +8,11 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Models;
 using MediaBrowser.Common.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace JellyTV.Services;
+namespace Jellyfin.Plugin.JellyTV.Services;
 
 /// <summary>
 /// Performs real stream health checks using ffmpeg (preferred, fast) or fallback real download.
@@ -56,10 +56,10 @@ public class ChannelHealthCheckService
     }
 
     /// <summary>
-    /// Checks health of a single channel by attempting to download real stream data.
-    /// Returns cached result if checked within the last 30 minutes.
+    /// Checks health of a single channel. Direct streams use a quick HTTP check;
+    /// tokenized streams go through full session resolution + ffmpeg + fallback.
     /// </summary>
-    public async Task<ChannelHealthStatus> CheckChannelAsync(string channelName, string channelUrl, CancellationToken ct = default)
+    public async Task<ChannelHealthStatus> CheckChannelAsync(string channelName, string channelUrl, int channelType = 0, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(channelUrl))
         {
@@ -84,8 +84,58 @@ public class ChannelHealthCheckService
             }
         }
 
+        // Direct (non-token) streams: quick HTTP check, no session resolution.
+        if (channelType == 0)
+        {
+            var quick = await QuickHttpCheckAsync(channelName, channelUrl, ct);
+            _healthCache[channelUrl] = (quick, DateTimeOffset.UtcNow);
+            return quick;
+        }
+
         var result = await PerformRealHealthCheckAsync(channelName, channelUrl, ct);
         _healthCache[channelUrl] = (result, DateTimeOffset.UtcNow);
+        return result;
+    }
+
+    /// <summary>
+    /// Quick HTTP GET check for direct streams. Alive = URL responds 2xx within timeout.
+    /// </summary>
+    private async Task<ChannelHealthStatus> QuickHttpCheckAsync(string channelName, string channelUrl, CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        var result = new ChannelHealthStatus
+        {
+            ChannelName = channelName,
+            ChannelUrl = channelUrl,
+            CheckedAt = DateTimeOffset.UtcNow,
+            StreamType = channelUrl.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) ? "hls" : "mpeg2ts"
+        };
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(10));
+
+            var client = _httpClientFactory.CreateClient("JellyTV");
+            using var request = new HttpRequestMessage(HttpMethod.Get, channelUrl);
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+
+            result.HttpStatus = (int)response.StatusCode;
+            result.BytesDownloaded = response.IsSuccessStatusCode ? MIN_BYTES_FOR_SUCCESS : 0;
+            if (!response.IsSuccessStatusCode)
+                result.ErrorMessage = $"HTTP {(int)response.StatusCode}";
+        }
+        catch (OperationCanceledException)
+        {
+            result.ErrorMessage = "Timeout (10s)";
+        }
+        catch (Exception ex)
+        {
+            result.ErrorMessage = ex.Message;
+        }
+
+        sw.Stop();
+        result.DurationMs = (int)sw.ElapsedMilliseconds;
         return result;
     }
 
@@ -118,7 +168,7 @@ public class ChannelHealthCheckService
     /// </summary>
     public async Task<List<ChannelHealthStatus>> CheckSourceChannelsAsync(
         string sourceId,
-        List<(string Name, string Url)> channels,
+        List<(string Name, string Url, int Type)> channels,
         CancellationToken ct = default)
     {
         PluginLog.Info($"[HEALTH] Starting health check for {channels.Count} channels from source {sourceId}");
@@ -138,7 +188,7 @@ public class ChannelHealthCheckService
                 await semaphore.WaitAsync(ct).ConfigureAwait(false);
                 try
                 {
-                    var result = await CheckChannelAsync(ch.Name, ch.Url, ct).ConfigureAwait(false);
+                    var result = await CheckChannelAsync(ch.Name, ch.Url, ch.Type, ct).ConfigureAwait(false);
                     lock (results)
                     {
                         results.Add(result);

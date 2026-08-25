@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
-namespace JellyTV.ScheduledTask;
+namespace Jellyfin.Plugin.JellyTV.ScheduledTask;
 
 /// <summary>
 /// Re-fetches all configured M3U sources on a schedule so the channel list
@@ -35,7 +35,7 @@ public sealed class SourceSyncTask : IScheduledTask
             return;
         }
 
-        var sources = plugin.Configuration.Sources;
+        var sources = plugin.Configuration.Channels;
         if (sources.Count == 0)
         {
             _logger.LogInformation("[JellyTV] SourceSyncTask: no sources configured, skipping.");
@@ -43,27 +43,8 @@ public sealed class SourceSyncTask : IScheduledTask
             return;
         }
 
-        _logger.LogInformation("[JellyTV] SourceSyncTask: syncing {Count} source(s).", sources.Count);
+        _logger.LogInformation("[JellyTV] SourceSyncTask: processing {Count} channel(s).", sources.Count);
         progress.Report(0);
-
-        // KnownBaseUrl is set on the first /m3u request. Fall back to localhost so
-        // the task can still update source stats even before the first client hit.
-        var baseUrl = plugin.KnownBaseUrl ?? "http://localhost:8096";
-
-        try
-        {
-            await plugin.M3uAggregator
-                .BuildCombinedM3uAsync(baseUrl, cancellationToken, forceRefresh: true)
-                .ConfigureAwait(false);
-
-            _logger.LogInformation("[JellyTV] SourceSyncTask: sync complete.");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[JellyTV] SourceSyncTask: sync failed.");
-        }
-
-        progress.Report(30);
 
         // ── EPG sync to Worker ────────────────────────────────────────────────
         // Push the filtered EPG XML to the Worker BEFORE TMDB enrichment so that

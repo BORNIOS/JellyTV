@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 
-namespace JellyTV;
+namespace Jellyfin.Plugin.JellyTV;
 
 /// <summary>
 /// Simple file logger for plugin-level diagnostic messages.

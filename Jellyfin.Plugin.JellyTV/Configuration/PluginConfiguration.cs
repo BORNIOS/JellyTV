@@ -1,8 +1,8 @@
 using System.Collections.Generic;
-using JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Models;
 using MediaBrowser.Model.Plugins;
 
-namespace JellyTV.Configuration;
+namespace Jellyfin.Plugin.JellyTV.Configuration;
 
 /// <summary>Plugin configuration.</summary>
 public class PluginConfiguration : BasePluginConfiguration
@@ -15,9 +15,9 @@ public class PluginConfiguration : BasePluginConfiguration
     public string PreferredAudioLanguages { get; set; } = "es,spa,es-419";
     public string PreferredSubtitleLanguages { get; set; } = "es,spa";
 
-    // ── M3U Source management ─────────────────────────────────────────────
-    /// <summary>List of IPTV sources managed by this plugin.</summary>
-    public List<IptvSource> Sources { get; set; } = new();
+    // ── Channel management ────────────────────────────────────────────────
+    /// <summary>Individual channels managed directly (no M3U sources).</summary>
+    public List<ChannelEntry> Channels { get; set; } = new();
 
     // ── Proxy pool ────────────────────────────────────────────────────────
     /// <summary>HTTPS proxies used for chain resolution (not segment downloads).</summary>

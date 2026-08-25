@@ -6,70 +6,56 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using JellyTV.Models;
-using JellyTV.Services;
+using Jellyfin.Plugin.JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Services;
+using MediaBrowser.Model.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
-namespace JellyTV.Controllers;
+namespace Jellyfin.Plugin.JellyTV.Controllers;
 
 [ApiController]
 [Route("JellyTV")]
 public class JellyTVController : ControllerBase
 {
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ITaskManager? _taskManager;
     private const string HlsMimeType = "application/vnd.apple.mpegurl";
     private static readonly TimeSpan StreamForcedRenewalMinInterval = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan HealthySegmentWindow = TimeSpan.FromSeconds(15);
 
     private static Plugin P => Plugin.Instance!;
     private static SessionManagerService Sessions   => P.SessionManager;
-    private static M3uAggregatorService  Aggregator => P.M3uAggregator;
     private static HlsRewriterService     HlsRewriter => P.HlsRewriter;
 
-    public JellyTVController(IHttpClientFactory httpClientFactory)
+    public JellyTVController(IHttpClientFactory httpClientFactory, ITaskManager? taskManager = null)
     {
         _httpClientFactory = httpClientFactory;
+        _taskManager = taskManager;
     }
 
-    // ── M3U COMBINADO ────────────────────────────────────────────────────────
-    // Jellyfin descarga esta URL como tuner M3U.
-    // Combina todas las fuentes y reescribe las URLs de canales → /JellyTV/stream
+    // ── DIAGNOSTIC M3U (opcional, para backward compat) ──────────────────────
     [HttpGet("m3u")]
     [AllowAnonymous]
-    public async Task<IActionResult> GetCombinedM3u([FromQuery] string? refresh = null)
+    public IActionResult GetCombinedM3u()
     {
-        var forceRefresh = string.Equals(refresh, "1", StringComparison.OrdinalIgnoreCase);
-        if (!forceRefresh && !string.IsNullOrWhiteSpace(refresh) && bool.TryParse(refresh, out var parsedRefresh))
-        {
-            forceRefresh = parsedRefresh;
-        }
+        // Set base URL on first access so ILiveTvService can build correct stream URLs.
+        P.KnownBaseUrl = $"{Request.Scheme}://{Request.Host}";
 
-        if (P.Configuration?.AutoRegisterTuner == true)
-        {
-            // No bloquear la respuesta M3U si el registro tarda/falla.
-            _ = Task.Run(() => P.EnsureTunerRegistered($"{Request.Scheme}://{Request.Host}"));
-        }
+        var channels = P.Configuration?.Channels?.Where(c => c.IsEnabled && !string.IsNullOrWhiteSpace(c.Url)).ToList() ?? new();
+        if (channels.Count == 0)
+            return Content("#EXTM3U\n# Sin canales. Ve a Dashboard → Plugins → JellyTV.\n", "application/x-mpegurl", Encoding.UTF8);
 
-        var sourcesCount = Plugin.Instance?.Configuration?.Sources?.Count ?? 0;
-        if (sourcesCount == 0)
+        var sb = new StringBuilder("#EXTM3U\n");
+        var proxy = $"{Request.Scheme}://{Request.Host}/JellyTV";
+        foreach (var ch in channels)
         {
-            var empty = "#EXTM3U\n# Sin fuentes configuradas. Ve a Dashboard → Plugins → JellyTV.\n";
-            return Content(empty, "application/x-mpegurl", Encoding.UTF8);
+            var enc = Convert.ToBase64String(Encoding.UTF8.GetBytes(ch.Url)).Replace('+', '-').Replace('/', '_').TrimEnd('=');
+            sb.AppendLine($"#EXTINF:-1 tvg-id=\"{ch.TvgId ?? ""}\" tvg-logo=\"{ch.LogoUrl ?? ""}\" group-title=\"{ch.Category ?? ""}\",{ch.Name}");
+            sb.AppendLine($"{proxy}/stream?url={enc}");
         }
-
-        try
-        {
-            // Evita fallar por cancelacion del cliente y permite cache/single-flight interno.
-            var m3u = await Aggregator.BuildCombinedM3uAsync(GetProxyBaseUrl(), CancellationToken.None, forceRefresh).ConfigureAwait(false);
-            return Content(m3u, "application/x-mpegurl", Encoding.UTF8);
-        }
-        catch (Exception ex)
-        {
-            PluginLog.Error("[M3U] Error building M3U", ex);
-            return StatusCode(500, "Error building playlist.");
-        }
+        return Content(sb.ToString(), "application/x-mpegurl", Encoding.UTF8);
     }
 
     // ── STREAM ───────────────────────────────────────────────────────────────
@@ -80,40 +66,47 @@ public class JellyTVController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> GetStream([FromQuery] string url, CancellationToken cancellationToken)
     {
-        // Decodificar Base64 (viene del M3U reescrito por M3uAggregatorService)
+        // Ensure KnownBaseUrl is set for ILiveTvService.
+        P.KnownBaseUrl ??= $"{Request.Scheme}://{Request.Host}";
+
+        // Decodificar Base64
         string decodedUrl;
         try   { decodedUrl = HlsRewriterService.DecodeSegmentUrl(url); }
         catch { decodedUrl = url; } // fallback si llega sin codificar
 
-        PluginLog.Info($"[STREAM] url={decodedUrl}");
+        // Tipo de canal: 0=Directo, 1=FAST, 2=TokenEfimero, 3=TokenPermanente.
+        var channel = Plugin.Instance?.Configuration?.Channels
+            .FirstOrDefault(c => string.Equals(c.Url, decodedUrl, StringComparison.Ordinal));
+        var channelType = channel?.Type ?? 0;
 
+        // Los tokens efimeros (Xtream) deben reproducirse SIEMPRE via HLS (segmentos +
+        // renovacion proactiva). El path .ts directo reconecta cada ~20s y se congela.
+        if (channelType == 2 && decodedUrl.EndsWith(".ts", StringComparison.OrdinalIgnoreCase))
+        {
+            decodedUrl = decodedUrl[..^3] + ".m3u8";
+            PluginLog.Info($"[STREAM] Token ephemeral: normalizado .ts -> .m3u8: {decodedUrl}");
+        }
+
+        // ── .ts path: direct stream with reconnect (solo Directo/FAST) ──
+        if (decodedUrl.EndsWith(".ts", StringComparison.OrdinalIgnoreCase))
+        {
+            return await StreamTsDirectAsync(decodedUrl, cancellationToken).ConfigureAwait(false);
+        }
+
+        // ── .m3u8 path: HLS playlist proxy (fetch, rewrite, cache) ──────
         try
         {
-            var session = await Sessions.GetOrCreateSessionAsync(decodedUrl, cancellationToken).ConfigureAwait(false);
-            if (Sessions.NeedsRenewal(session))
-                await Sessions.RenewSessionAsync(session, cancellationToken).ConfigureAwait(false);
-
-            await RefreshTokenizedSessionIfStaleAsync(session, cancellationToken).ConfigureAwait(false);
-
+            var session = await Sessions.GetOrCreateSessionAsync(decodedUrl, channelType, cancellationToken).ConfigureAwait(false);
             var resolved = session.LastResolved!;
-            PluginLog.Info($"[STREAM] session={session.SessionId} IsHls={resolved.IsHls} FinalUrl={resolved.FinalUrl}");
-
-            if (resolved.IsHls)
+            if (!resolved.IsHls)
             {
-                var rewrittenPlaylist = await FetchRewrittenPlaylistWithRetryAsync(session, cancellationToken)
-                    .ConfigureAwait(false);
-
-                Response.Headers["Cache-Control"] = "no-cache, no-store";
-                PluginLog.Info($"[STREAM] Returning rewritten HLS playlist sid={session.SessionId}");
-                return Content(rewrittenPlaylist, HlsMimeType, Encoding.UTF8);
+                PluginLog.Info($"[STREAM] Non-HLS, redirecting to {resolved.FinalUrl}");
+                return Redirect(resolved.FinalUrl);
             }
-
-            return Redirect(resolved.FinalUrl);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            // Normal when playback is stopped and Jellyfin aborts inflight requests.
-            return new EmptyResult();
+            var rewritten = await HlsRewriter.FetchAndRewritePlaylistAsync(
+                session, GetProxyBaseUrl(), cancellationToken).ConfigureAwait(false);
+            Response.Headers["Cache-Control"] = "no-cache, no-store";
+            return Content(rewritten, HlsMimeType, Encoding.UTF8);
         }
         catch (HttpRequestException ex)
         {
@@ -124,72 +117,6 @@ public class JellyTVController : ControllerBase
         {
             PluginLog.Error($"[STREAM] Internal error", ex);
             return StatusCode(500, ex.Message);
-        }
-    }
-
-    private static async Task RefreshTokenizedSessionIfStaleAsync(StreamSession session, CancellationToken ct)
-    {
-        var resolved = session.LastResolved;
-        if (resolved is null || string.IsNullOrWhiteSpace(resolved.TokenValue))
-        {
-            return;
-        }
-
-        var age = DateTimeOffset.UtcNow - resolved.ResolvedAt;
-        var windowSeconds = session.LastPlaylistWindowSeconds;
-        var targetDurationSeconds = session.LastPlaylistTargetDurationSeconds;
-
-        // Renew only when entering the last real segment of the measured media window.
-        // If target duration is unavailable, avoid proactive renewal and rely on reactive 401/403 recovery.
-        var shouldRenewByWindow = false;
-        if (windowSeconds.HasValue && windowSeconds.Value > 0
-            && targetDurationSeconds.HasValue && targetDurationSeconds.Value > 0)
-        {
-            var renewAfterSeconds = Math.Max(0, windowSeconds.Value - targetDurationSeconds.Value);
-            shouldRenewByWindow = age.TotalSeconds >= renewAfterSeconds;
-        }
-
-        if (!shouldRenewByWindow)
-        {
-            return;
-        }
-
-        // If segments are still being served recently, avoid churning token renewal from repeated /stream polls.
-        if (session.LastSegmentServedAt.HasValue
-            && DateTimeOffset.UtcNow - session.LastSegmentServedAt.Value <= HealthySegmentWindow)
-        {
-            return;
-        }
-
-        if (session.LastForcedRenewalAt.HasValue
-            && DateTimeOffset.UtcNow - session.LastForcedRenewalAt.Value < StreamForcedRenewalMinInterval)
-        {
-            return;
-        }
-
-        if (windowSeconds.HasValue)
-        {
-            PluginLog.Info($"[STREAM] Entering last segment (age={age.TotalSeconds:F1}s window={windowSeconds.Value:F1}s target={targetDurationSeconds.GetValueOrDefault(0):F1}s), forcing renewal sid={session.SessionId}");
-        }
-        else
-        {
-            PluginLog.Info($"[STREAM] Tokenized session stale ({age.TotalSeconds:F1}s), forcing renewal sid={session.SessionId}");
-        }
-        session.LastForcedRenewalAt = DateTimeOffset.UtcNow;
-        await Sessions.RenewSessionAsync(session, ct).ConfigureAwait(false);
-    }
-
-    private async Task<string> FetchRewrittenPlaylistWithRetryAsync(StreamSession session, CancellationToken ct)
-    {
-        try
-        {
-            return await HlsRewriter.FetchAndRewritePlaylistAsync(session, GetProxyBaseUrl(), ct).ConfigureAwait(false);
-        }
-        catch (HttpRequestException ex) when (IsAuthFailure(ex))
-        {
-            PluginLog.Warn($"[STREAM] Playlist fetch got {(int?)ex.StatusCode}, renewing sid={session.SessionId} and retrying once");
-            await Sessions.RenewSessionAsync(session, ct).ConfigureAwait(false);
-            return await HlsRewriter.FetchAndRewritePlaylistAsync(session, GetProxyBaseUrl(), ct).ConfigureAwait(false);
         }
     }
 
@@ -208,7 +135,8 @@ public class JellyTVController : ControllerBase
             return BadRequest("Invalid segment URL.");
         }
 
-        PluginLog.Info($"[SEGMENT] sid={sid} upstream={upstreamUrl}");
+        if (Plugin.Instance?.Configuration.VerboseLogging == true)
+            PluginLog.Info($"[SEGMENT] sid={sid} upstream={upstreamUrl}");
 
         var session = Sessions.GetSessionById(sid);
         if (session is null)
@@ -288,20 +216,20 @@ public class JellyTVController : ControllerBase
     public async Task<IActionResult> GetChannels([FromQuery] string? sourceId = null, CancellationToken ct = default)
     {
         var config = Plugin.Instance?.Configuration;
-        if (config is null || config.Sources.Count == 0)
+        if (config is null || config.Channels.Count == 0)
         {
             return Ok(new { channels = Array.Empty<object>(), channelCount = 0, aliveCount = 0, deadCount = 0 });
         }
 
         try
         {
-            var sources = string.IsNullOrWhiteSpace(sourceId)
-                ? config.Sources
-                : config.Sources.Where(s => s.Id == sourceId).ToList();
+            var channels = string.IsNullOrWhiteSpace(sourceId)
+                ? config.Channels
+                : config.Channels.Where(c => c.Id == sourceId).ToList();
 
-            if (!sources.Any())
+            if (!channels.Any())
             {
-                return NotFound(new { error = "Source not found" });
+                return NotFound(new { error = "Channel not found" });
             }
 
             var rows = new List<object>();
@@ -309,39 +237,40 @@ public class JellyTVController : ControllerBase
             var deadCount = 0;
             var healthCheck = Plugin.Instance?.ChannelHealthCheck;
 
-            foreach (var source in sources.Where(s => s.IsEnabled))
+            foreach (var ch in channels.Where(c => c.IsEnabled))
             {
-                // Parse M3U to extract channels
-                var channels = await ParseM3uChannelsAsync(source.Url, ct).ConfigureAwait(false);
-                foreach (var (channelName, channelUrl) in channels)
+                ChannelHealthStatus? health = null;
+                if (healthCheck is not null && healthCheck.TryGetCachedChannelStatus(ch.Url, out var cached))
                 {
-                    ChannelHealthStatus? health = null;
-                    if (healthCheck is not null && healthCheck.TryGetCachedChannelStatus(channelUrl, out var cached))
-                    {
-                        health = cached;
-                    }
-
-                    var status = health is null ? "unknown" : (health.IsAlive ? "alive" : "dead");
-                    if (status == "alive") aliveCount++;
-                    else if (status == "dead") deadCount++;
-
-                    rows.Add(new
-                    {
-                        sourceId = source.Id,
-                        sourceName = source.Name,
-                        name = channelName,
-                        url = channelUrl,
-                        status,
-                        httpStatus = health?.HttpStatus,
-                        bytesDownloaded = health?.BytesDownloaded,
-                        streamType = health?.StreamType,
-                        checkedAt = health?.CheckedAt,
-                        durationMs = health?.DurationMs,
-                        errorMessage = health?.ErrorMessage
-                    });
+                    health = cached;
                 }
 
+                var status = health is null ? "unknown" : (health.IsAlive ? "alive" : "dead");
+                if (status == "alive") aliveCount++;
+                else if (status == "dead") deadCount++;
+
+                rows.Add(new
+                {
+                    id = ch.Id,
+                    name = ch.Name,
+                    url = ch.Url,
+                    type = ch.Type,
+                    category = ch.Category,
+                    isEnabled = ch.IsEnabled,
+                    logoUrl = ch.LogoUrl,
+                    tvgId = ch.TvgId,
+                    lastCheckAlive = ch.LastCheckAlive,
+                    lastCheckedAt = ch.LastCheckedAt,
+                    status,
+                    httpStatus = health?.HttpStatus,
+                    bytesDownloaded = health?.BytesDownloaded,
+                    streamType = health?.StreamType,
+                    checkedAt = health?.CheckedAt,
+                    durationMs = health?.DurationMs,
+                    errorMessage = health?.ErrorMessage ?? ch.LastCheckError
+                });
             }
+
             return Ok(new
             {
                 channels = rows,
@@ -354,6 +283,29 @@ public class JellyTVController : ControllerBase
         {
             PluginLog.Error("[CHANNELS] Error fetching channels", ex);
             return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("refresh-guide")]
+    [AllowAnonymous]
+    public IActionResult RefreshGuide()
+    {
+        if (_taskManager is null)
+            return Ok(new { status = "no-task-manager" });
+
+        try
+        {
+            var guideTask = _taskManager.ScheduledTasks
+                .FirstOrDefault(t => t.Name.Contains("Refresh Guide", StringComparison.OrdinalIgnoreCase));
+            if (guideTask is null)
+                return Ok(new { status = "task-not-found" });
+
+            _taskManager.Execute(guideTask, new TaskOptions());
+            return Ok(new { status = "started", task = guideTask.Name });
+        }
+        catch (Exception ex)
+        {
+            return Ok(new { status = "error", error = ex.Message });
         }
     }
 
@@ -371,33 +323,41 @@ public class JellyTVController : ControllerBase
 
         try
         {
-            var sources = string.IsNullOrWhiteSpace(sourceId)
-                ? config.Sources.Where(s => s.IsEnabled).ToList()
-                : config.Sources.Where(s => s.Id == sourceId && s.IsEnabled).ToList();
+            var channels = string.IsNullOrWhiteSpace(sourceId)
+                ? config.Channels.Where(c => c.IsEnabled && !string.IsNullOrWhiteSpace(c.Url)).ToList()
+                : config.Channels.Where(c => c.Id == sourceId && c.IsEnabled && !string.IsNullOrWhiteSpace(c.Url)).ToList();
 
-            if (!sources.Any())
+            if (!channels.Any())
             {
-                return NotFound(new { error = "No enabled sources found" });
+                return NotFound(new { error = "No enabled channels found" });
             }
 
             // Execute in background
             _ = Task.Run(async () =>
             {
-                foreach (var source in sources)
+                var channelUrls = channels.Select(c => (c.Name, c.Url, c.Type)).ToList();
+                var results = await healthCheck.CheckSourceChannelsAsync("manual", channelUrls, CancellationToken.None).ConfigureAwait(false);
+
+                // Update channel health status
+                foreach (var ch in channels)
                 {
-                    try
+                    var r = results.FirstOrDefault(res => res.ChannelUrl == ch.Url);
+                    if (r is not null)
                     {
-                        var channels = await ParseM3uChannelsAsync(source.Url, CancellationToken.None).ConfigureAwait(false);
-                        await healthCheck.CheckSourceChannelsAsync(source.Id, channels, CancellationToken.None).ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        PluginLog.Error($"[HEALTH-CHECK] Error checking source {source.Name}", ex);
+                        ch.LastCheckAlive = r.IsAlive;
+                        ch.LastCheckedAt = DateTimeOffset.UtcNow;
+                        ch.LastCheckError = r.ErrorMessage;
                     }
                 }
+
+                try { Plugin.Instance?.SaveConfiguration(); } catch { }
+
+                var reporter = Plugin.Instance?.WorkerReporter;
+                if (reporter is not null)
+                    await reporter.ReportAsync(results, CancellationToken.None).ConfigureAwait(false);
             }, CancellationToken.None);
 
-            return Ok(new { message = "Health check started in background", sourcesCount = sources.Count });
+            return Ok(new { message = "Health check started in background", channelsCount = channels.Count });
         }
         catch (Exception ex)
         {
@@ -407,51 +367,6 @@ public class JellyTVController : ControllerBase
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-    private async Task<List<(string Name, string Url)>> ParseM3uChannelsAsync(
-        string sourceUrl,
-        CancellationToken ct)
-    {
-        var channels = new List<(string, string)>();
-
-        try
-        {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(30));
-
-            var client = _httpClientFactory.CreateClient("JellyTV");
-            var content = await client.GetStringAsync(sourceUrl, cts.Token).ConfigureAwait(false);
-            var lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-
-            string? currentName = null;
-            foreach (var line in lines)
-            {
-                var trimmed = line.Trim();
-
-                if (trimmed.StartsWith("#EXTINF:"))
-                {
-                    var commaIndex = trimmed.LastIndexOf(',');
-                    currentName = commaIndex >= 0 && commaIndex + 1 < trimmed.Length
-                        ? trimmed[(commaIndex + 1)..].Trim()
-                        : "(Sin nombre)";
-                }
-                else if (!string.IsNullOrEmpty(trimmed) && !trimmed.StartsWith("#"))
-                {
-                    if (!string.IsNullOrEmpty(currentName))
-                    {
-                        channels.Add((currentName, trimmed));
-                    }
-
-                    currentName = null;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            PluginLog.Warn($"[CHANNELS] Failed to parse M3U: {ex.Message}");
-        }
-
-        return channels;
-    }
 
     private async Task<IActionResult> ProxySegmentAsync(StreamSession session, string upstreamUrl, CancellationToken ct)
     {
@@ -460,7 +375,8 @@ public class JellyTVController : ControllerBase
 
         for (var attempt = 1; attempt <= 2; attempt++)
         {
-            PluginLog.Info($"[SEGMENT] attempt={attempt} url={fetchUrl}");
+            if (Plugin.Instance?.Configuration.VerboseLogging == true)
+                PluginLog.Info($"[SEGMENT] attempt={attempt} url={fetchUrl}");
             var (response, errorResult) = await FetchSegmentResponseAsync(client, fetchUrl, attempt, ct).ConfigureAwait(false);
             if (errorResult is not null)
             {
@@ -472,34 +388,42 @@ public class JellyTVController : ControllerBase
                 return StatusCode(502, "Segment fetch failed.");
             }
 
-            PluginLog.Info($"[SEGMENT] HTTP {(int)response.StatusCode} attempt={attempt}");
-
-            if (IsAuthFailure(response.StatusCode) && attempt == 1)
-            {
-                response.Dispose();
-
-                var (renewed, nextFetchUrl) = await TryRenewAndGetSegmentUrlAsync(session, fetchUrl, ct).ConfigureAwait(false);
-                if (!renewed)
-                {
-                    return StatusCode(502, "Renewal failed.");
-                }
-
-                fetchUrl = nextFetchUrl;
-                continue;
-            }
+            if (Plugin.Instance?.Configuration.VerboseLogging == true)
+                PluginLog.Info($"[SEGMENT] HTTP {(int)response.StatusCode} attempt={attempt}");
 
             if (!response.IsSuccessStatusCode)
             {
+                var statusCode = response.StatusCode;
                 response.Dispose();
-                PluginLog.Warn($"[SEGMENT] Upstream error {(int)response.StatusCode}");
-                return StatusCode((int)response.StatusCode);
+                PluginLog.Warn($"[SEGMENT] Upstream error {(int)statusCode} attempt={attempt}");
+
+                if (statusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden && attempt == 1)
+                {
+                    try
+                    {
+                        await Sessions.RenewSessionAsync(session, ct).ConfigureAwait(false);
+                        var remapped = await TryRemapSegmentUrlFromFreshPlaylistAsync(session, fetchUrl, ct).ConfigureAwait(false);
+                        if (!string.IsNullOrWhiteSpace(remapped))
+                        {
+                            fetchUrl = remapped;
+                            continue;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        PluginLog.Warn($"[SEGMENT] Token refresh/remap failed: {ex.Message}");
+                    }
+                }
+
+                return StatusCode((int)statusCode);
             }
 
             session.LastSegmentServedAt = DateTimeOffset.UtcNow;
 
             return await StreamSegmentToClientAsync(response, ct).ConfigureAwait(false);
         }
-        return StatusCode(502, "Segment unavailable after renewal.");
+
+        return StatusCode(502, "Segment unavailable after token refresh.");
     }
 
     private async Task<IActionResult> ProxySubPlaylistAsync(StreamSession session, string subUrl, CancellationToken ct)
@@ -507,40 +431,21 @@ public class JellyTVController : ControllerBase
         var client = _httpClientFactory.CreateClient("JellyTV");
         var fetchUrl = subUrl;
 
-        for (var attempt = 1; attempt <= 2; attempt++)
+        try
         {
-            try
-            {
-                var content = await client.GetStringAsync(fetchUrl, ct).ConfigureAwait(false);
-                var rewritten = HlsRewriter.RewritePlaylistContent(content, fetchUrl, session.SessionId, GetProxyBaseUrl());
-                return Content(rewritten, HlsMimeType, Encoding.UTF8);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                return new EmptyResult();
-            }
-            catch (HttpRequestException ex) when (IsAuthFailure(ex) && attempt == 1)
-            {
-                PluginLog.Warn($"[SUBPLAYLIST] Token rejected for {fetchUrl}; renewing and retrying once.");
-                try
-                {
-                    await Sessions.RenewSessionAsync(session, ct).ConfigureAwait(false);
-                    fetchUrl = TryRebuildTokenizedHlsrUrl(fetchUrl, session.LastResolved?.FinalUrl);
-                }
-                catch (Exception renewEx)
-                {
-                    PluginLog.Error("[SUBPLAYLIST] Renewal failed", renewEx);
-                    return StatusCode(502);
-                }
-            }
-            catch (Exception ex)
-            {
-                PluginLog.Error($"[SUBPLAYLIST] Failed {fetchUrl}", ex);
-                return StatusCode(502);
-            }
+            var content = await client.GetStringAsync(fetchUrl, ct).ConfigureAwait(false);
+            var rewritten = HlsRewriter.RewritePlaylistContent(content, fetchUrl, session.SessionId, GetProxyBaseUrl());
+            return Content(rewritten, HlsMimeType, Encoding.UTF8);
         }
-
-        return StatusCode(502);
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return new EmptyResult();
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Error($"[SUBPLAYLIST] Failed {fetchUrl}", ex);
+            return StatusCode(502);
+        }
     }
 
     private async Task<(HttpResponseMessage? Response, IActionResult? ErrorResult)> FetchSegmentResponseAsync(HttpClient client, string fetchUrl, int attempt, CancellationToken ct)
@@ -561,31 +466,6 @@ public class JellyTVController : ControllerBase
         }
     }
 
-    private async Task<(bool Succeeded, string NextFetchUrl)> TryRenewAndGetSegmentUrlAsync(StreamSession session, string failedUrl, CancellationToken ct)
-    {
-        PluginLog.Warn($"[SEGMENT] Token rejected, renewing session {session.SessionId}");
-
-        try
-        {
-            await Sessions.RenewSessionAsync(session, ct).ConfigureAwait(false);
-
-            var remapped = await TryRemapSegmentUrlFromFreshPlaylistAsync(session, failedUrl, ct).ConfigureAwait(false);
-            if (!string.IsNullOrWhiteSpace(remapped))
-            {
-                PluginLog.Info($"[SEGMENT] Remapped segment URL from fresh playlist: {remapped}");
-                return (true, remapped);
-            }
-
-            var rebuilt = TryRebuildTokenizedHlsrUrl(failedUrl, session.LastResolved?.FinalUrl);
-            return (true, rebuilt);
-        }
-        catch (Exception ex)
-        {
-            PluginLog.Error("[SEGMENT] Renewal failed", ex);
-            return (false, failedUrl);
-        }
-    }
-
     private async Task<IActionResult> StreamSegmentToClientAsync(HttpResponseMessage response, CancellationToken ct)
     {
         Response.ContentType = response.Content.Headers.ContentType?.ToString() ?? "video/MP2T";
@@ -594,7 +474,8 @@ public class JellyTVController : ControllerBase
             Response.ContentLength = response.Content.Headers.ContentLength.Value;
         }
 
-        PluginLog.Info($"[SEGMENT] Streaming {Response.ContentLength ?? -1} bytes");
+        if (Plugin.Instance?.Configuration.VerboseLogging == true)
+            PluginLog.Info($"[SEGMENT] Streaming {Response.ContentLength ?? -1} bytes");
         using (response)
         {
             var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
@@ -753,6 +634,60 @@ public class JellyTVController : ControllerBase
 
     private string GetProxyBaseUrl() => $"{Request.Scheme}://{Request.Host}/JellyTV";
 
+    // ── Simple redirect: resolve alfa → tuenisix, 302 to Jellyfin ────────
+    private async Task<IActionResult> RedirectToResolvedTs(string alfaUrl, CancellationToken ct)
+    {
+        try
+        {
+            using var h = new SocketsHttpHandler { AllowAutoRedirect = true, MaxAutomaticRedirections = 15, UseCookies = false };
+            using var c = new HttpClient(h) { Timeout = TimeSpan.FromSeconds(15) };
+            using var r = await c.GetAsync(alfaUrl, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            var final = r.RequestMessage?.RequestUri?.ToString() ?? alfaUrl;
+            PluginLog.Info($"[TS] Redirect → {final}");
+            return Redirect(final);
+        }
+        catch (Exception ex) { PluginLog.Error($"[TS] {ex.Message}"); return StatusCode(502, ex.Message); }
+    }
+
+    // ── Direct stream with reconnect: no channels, no complexity ──────────
+    private async Task<IActionResult> StreamTsDirectAsync(string alfaUrl, CancellationToken ct)
+    {
+        Response.ContentType = "video/mp2t";
+        Response.Headers["Cache-Control"] = "no-cache, no-store";
+        PluginLog.Info($"[StreamTS] Starting direct stream for {alfaUrl}");
+
+        int round = 0;
+        while (!ct.IsCancellationRequested)
+        {
+            round++;
+            try
+            {
+                using var handler = new SocketsHttpHandler { AllowAutoRedirect = true, MaxAutomaticRedirections = 15, UseCookies = false };
+                using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
+                PluginLog.Info($"[StreamTS] Round {round}: connecting...");
+                using var response = await client.GetAsync(alfaUrl, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? alfaUrl;
+                PluginLog.Info($"[StreamTS] Round {round}: connected → {finalUrl}, streaming bytes...");
+                using var upstream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                await upstream.CopyToAsync(Response.Body, ct).ConfigureAwait(false);
+                PluginLog.Info($"[StreamTS] Round {round}: upstream EOF (stream ended)");
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (Exception ex)
+            {
+                PluginLog.Info($"[StreamTS] Round {round}: {ex.GetType().Name} — {ex.Message}, retrying in 500ms...");
+            }
+
+            if (!ct.IsCancellationRequested)
+            {
+                await Response.Body.FlushAsync(ct).ConfigureAwait(false);
+                await Task.Delay(500, ct).ConfigureAwait(false);
+            }
+        }
+        PluginLog.Info("[StreamTS] Client disconnected, stopping.");
+        return new EmptyResult();
+    }
     private static bool IsAuthFailure(HttpRequestException ex)
     {
         return ex.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Unauthorized;

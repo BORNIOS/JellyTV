@@ -1,6 +1,6 @@
 using System;
 
-namespace JellyTV.Models;
+namespace Jellyfin.Plugin.JellyTV.Models;
 
 /// <summary>
 /// Health check result for a single channel.
