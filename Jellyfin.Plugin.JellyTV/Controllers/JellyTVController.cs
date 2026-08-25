@@ -21,6 +21,7 @@ public class JellyTVController : ControllerBase
     private readonly IHttpClientFactory _httpClientFactory;
     private const string HlsMimeType = "application/vnd.apple.mpegurl";
     private static readonly TimeSpan StreamForcedRenewalMinInterval = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan HealthySegmentWindow = TimeSpan.FromSeconds(15);
 
     private static Plugin P => Plugin.Instance!;
     private static SessionManagerService Sessions   => P.SessionManager;
@@ -149,6 +150,13 @@ public class JellyTVController : ControllerBase
         }
 
         if (!shouldRenewByWindow)
+        {
+            return;
+        }
+
+        // If segments are still being served recently, avoid churning token renewal from repeated /stream polls.
+        if (session.LastSegmentServedAt.HasValue
+            && DateTimeOffset.UtcNow - session.LastSegmentServedAt.Value <= HealthySegmentWindow)
         {
             return;
         }
@@ -380,13 +388,7 @@ public class JellyTVController : ControllerBase
                     try
                     {
                         var channels = await ParseM3uChannelsAsync(source.Url, CancellationToken.None).ConfigureAwait(false);
-                        var results = await healthCheck.CheckSourceChannelsAsync(source.Id, channels, CancellationToken.None).ConfigureAwait(false);
-
-                        var reporter = Plugin.Instance?.WorkerReporter;
-                        if (reporter is not null)
-                        {
-                            await reporter.ReportAsync(results, CancellationToken.None).ConfigureAwait(false);
-                        }
+                        await healthCheck.CheckSourceChannelsAsync(source.Id, channels, CancellationToken.None).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
@@ -405,165 +407,6 @@ public class JellyTVController : ControllerBase
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    [HttpPost("epg/sync")]
-    [AllowAnonymous]
-    public IActionResult StartEpgSync()
-    {
-        var svc = Plugin.Instance?.EpgFilter;
-        if (svc is null)
-            return StatusCode(503, new { error = "EpgFilterService unavailable" });
-
-        _ = Task.Run(async () =>
-        {
-            try { await svc.SyncAllToWorkerAsync(CancellationToken.None).ConfigureAwait(false); }
-            catch (Exception ex) { PluginLog.Error("[EPG] Background sync failed", ex); }
-        }, CancellationToken.None);
-
-        return Ok(new { status = "started" });
-    }
-
-    [HttpPost("epg/sync-wait")]
-    [AllowAnonymous]
-    public async Task<IActionResult> StartEpgSyncWait(CancellationToken ct)
-    {
-        var svc = Plugin.Instance?.EpgFilter;
-        if (svc is null)
-            return StatusCode(503, new { error = "EpgFilterService unavailable" });
-
-        try
-        {
-            var result = await svc.SyncAllToWorkerAsync(ct).ConfigureAwait(false);
-            return Ok(result);
-        }
-        catch (Exception ex)
-        {
-            PluginLog.Error("[EPG] Sync-wait failed", ex);
-            return StatusCode(500, new { error = ex.Message });
-        }
-    }
-
-    // ── TMDB ENRICHMENT ───────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Dispara el enriquecimiento TMDB en segundo plano y responde inmediatamente.
-    /// </summary>
-    [HttpPost("tmdb/enrich")]
-    [AllowAnonymous]
-    public IActionResult StartTmdbEnrich()
-    {
-        var plugin = Plugin.Instance;
-        if (plugin?.TmdbEnrichment is null)
-            return StatusCode(503, new { error = "TmdbEnrichmentService unavailable" });
-
-        var cfg = plugin.Configuration;
-        if (string.IsNullOrWhiteSpace(cfg.TmdbApiKey) || string.IsNullOrWhiteSpace(cfg.WorkerBaseUrl))
-            return BadRequest(new { error = "TmdbApiKey and WorkerBaseUrl must be configured" });
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var summary = await plugin.TmdbEnrichment
-                    .EnrichAsync(null, CancellationToken.None)
-                    .ConfigureAwait(false);
-                PluginLog.Info($"[TMDB] Enrich done. titles={summary.TitlesFound}, enriched={summary.Enriched}, saved={summary.Saved}, errors={summary.Errors}");
-            }
-            catch (Exception ex)
-            {
-                PluginLog.Error("[TMDB] Background enrich failed", ex);
-            }
-        }, CancellationToken.None);
-
-        return Ok(new { status = "started" });
-    }
-
-    /// <summary>
-    /// Dispara el enriquecimiento TMDB y espera el resultado completo.
-    /// </summary>
-    [HttpPost("tmdb/enrich-wait")]
-    [AllowAnonymous]
-    public async Task<IActionResult> StartTmdbEnrichWait(CancellationToken ct)
-    {
-        var plugin = Plugin.Instance;
-        if (plugin?.TmdbEnrichment is null)
-            return StatusCode(503, new { error = "TmdbEnrichmentService unavailable" });
-
-        var cfg = plugin.Configuration;
-        if (string.IsNullOrWhiteSpace(cfg.TmdbApiKey) || string.IsNullOrWhiteSpace(cfg.WorkerBaseUrl))
-            return BadRequest(new { error = "TmdbApiKey and WorkerBaseUrl must be configured" });
-
-        try
-        {
-            var summary = await plugin.TmdbEnrichment
-                .EnrichAsync(null, ct)
-                .ConfigureAwait(false);
-            return Ok(summary);
-        }
-        catch (Exception ex)
-        {
-            PluginLog.Error("[TMDB] Enrich-wait failed", ex);
-            return StatusCode(500, new { error = ex.Message });
-        }
-    }
-
-    /// <summary>
-    /// Pipeline completo: EPG sync → TMDB enrichment (espera resultado).
-    /// Equivale a lo que hace SourceSyncTask en los pasos 2 y 3.
-    /// </summary>
-    [HttpPost("sync/full-pipeline")]
-    [AllowAnonymous]
-    public async Task<IActionResult> RunFullPipeline(CancellationToken ct)
-    {
-        var plugin = Plugin.Instance;
-        if (plugin is null)
-            return StatusCode(503, new { error = "Plugin unavailable" });
-
-        var result = new System.Text.Json.Nodes.JsonObject();
-
-        // Step 1: EPG sync
-        if (plugin.EpgFilter is not null)
-        {
-            try
-            {
-                PluginLog.Info("[PIPELINE] Step 1: EPG sync starting...");
-                var epg = await plugin.EpgFilter.SyncAllToWorkerAsync(ct).ConfigureAwait(false);
-                result["epg"] = System.Text.Json.JsonSerializer.SerializeToNode(epg);
-                PluginLog.Info($"[PIPELINE] Step 1: EPG sync done. sources={epg.Sources.Count}");
-            }
-            catch (Exception ex)
-            {
-                result["epg_error"] = ex.Message;
-                PluginLog.Error("[PIPELINE] EPG sync failed", ex);
-            }
-        }
-
-        // Step 2: TMDB enrichment
-        if (plugin.TmdbEnrichment is not null &&
-            !string.IsNullOrWhiteSpace(plugin.Configuration.TmdbApiKey) &&
-            !string.IsNullOrWhiteSpace(plugin.Configuration.WorkerBaseUrl))
-        {
-            try
-            {
-                PluginLog.Info("[PIPELINE] Step 2: TMDB enrichment starting...");
-                var summary = await plugin.TmdbEnrichment.EnrichAsync(null, ct).ConfigureAwait(false);
-                result["tmdb"] = System.Text.Json.JsonSerializer.SerializeToNode(summary);
-                PluginLog.Info($"[PIPELINE] Step 2: TMDB enrichment done. titles={summary.TitlesFound}, enriched={summary.Enriched}, saved={summary.Saved}");
-            }
-            catch (Exception ex)
-            {
-                result["tmdb_error"] = ex.Message;
-                PluginLog.Error("[PIPELINE] TMDB enrichment failed", ex);
-            }
-        }
-        else
-        {
-            result["tmdb_skipped"] = "TmdbApiKey o WorkerBaseUrl no configurados";
-        }
-
-        return Ok(result);
-    }
-
     private async Task<List<(string Name, string Url)>> ParseM3uChannelsAsync(
         string sourceUrl,
         CancellationToken ct)
