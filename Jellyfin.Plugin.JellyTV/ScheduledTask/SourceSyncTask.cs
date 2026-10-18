@@ -9,23 +9,37 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.JellyTV.ScheduledTask;
 
 /// <summary>
-/// Re-fetches all configured M3U sources on a schedule so the channel list
-/// stays current without waiting for a manual trigger or Jellyfin tuner poll.
+/// Sincroniza la guía EPG local: descarga las fuentes XMLTV, filtra por tvg-id de los canales,
+/// enriquece con TMDB y escribe el archivo de guía fusionado (epg.xml) que Jellyfin consume como
+/// proveedor XMLTV. Cadencia pesada (horas, default 24). Tras un sync exitoso encola el
+/// "Refresh Guide" de Jellyfin para que re-importe la guía.
 /// </summary>
 public sealed class SourceSyncTask : IScheduledTask
 {
     private readonly ILogger<SourceSyncTask> _logger;
+    private readonly ITaskManager _taskManager;
 
-    public SourceSyncTask(ILogger<SourceSyncTask> logger)
+    public SourceSyncTask(
+        ILogger<SourceSyncTask> logger,
+        ITaskManager taskManager)
     {
         _logger = logger;
+        _taskManager = taskManager;
     }
 
-    public string Name        => "JellyTV: Sync IPTV Sources";
-    public string Description => "Re-fetches all configured M3U sources and refreshes the channel list.";
-    public string Category    => "JellyTV";
-    public string Key         => "JellyTVSourceSync";
+    /// <inheritdoc/>
+    public string Name => "JellyTV: Sincronizar EPG (guía local)";
 
+    /// <inheritdoc/>
+    public string Description => "Descarga fuentes XMLTV, filtra por canales y regenera la guía local (epg.xml) con enriquecimiento TMDB.";
+
+    /// <inheritdoc/>
+    public string Category => "JellyTV";
+
+    /// <inheritdoc/>
+    public string Key => "JellyTVSourceSync";
+
+    /// <inheritdoc/>
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
         var plugin = Plugin.Instance;
@@ -46,21 +60,24 @@ public sealed class SourceSyncTask : IScheduledTask
         _logger.LogInformation("[JellyTV] SourceSyncTask: processing {Count} channel(s).", sources.Count);
         progress.Report(0);
 
-        // ── EPG sync to Worker ────────────────────────────────────────────────
-        // Push the filtered EPG XML to the Worker BEFORE TMDB enrichment so that
-        // epg_programmes is up-to-date when we query uncached-titles.
-        if (!string.IsNullOrWhiteSpace(plugin.Configuration.WorkerBaseUrl))
+        // ── EPG local + enriquecimiento TMDB ────────────────────────────────
+        // Descarga las fuentes XMLTV, filtra por tvg-id de los canales, enriquece con TMDB
+        // (si hay clave) y escribe la guía local fusionada que el plugin sirve a Jellyfin.
+        if (plugin.Configuration.EpgSources?.Any(s => s.IsEnabled) == true)
         {
-            _logger.LogInformation("[JellyTV] SourceSyncTask: pushing EPG XML to Worker.");
+            _logger.LogInformation("[JellyTV] SourceSyncTask: syncing local EPG guide.");
+            bool synced = false;
             try
             {
-                var epgResult = await plugin.EpgFilter
-                    .SyncAllToWorkerAsync(cancellationToken)
-                    .ConfigureAwait(false);
+                var epgResult = await plugin.EpgFilter.SyncLocalGuideAsync(cancellationToken).ConfigureAwait(false);
 
                 _logger.LogInformation(
-                    "[JellyTV] SourceSyncTask: EPG sync done. sources={Sources}, programmes={Programmes}",
-                    epgResult.Sources.Count, epgResult.Sources.Sum(s => s.ProgrammesKept));
+                    "[JellyTV] SourceSyncTask: EPG sync done. success={Success}, sources={Sources}, programmes={Programmes}",
+                    epgResult.Success,
+                    epgResult.Sources.Count,
+                    epgResult.Sources.Sum(s => s.ProgrammesKept));
+
+                synced = epgResult.Success;
             }
             catch (OperationCanceledException)
             {
@@ -70,55 +87,34 @@ public sealed class SourceSyncTask : IScheduledTask
             {
                 _logger.LogError(ex, "[JellyTV] SourceSyncTask: EPG sync failed.");
             }
-        }
 
-        progress.Report(60);
-
-        // ── TMDB enrichment ──────────────────────────────────────────────────
-        // Runs after EPG sync so epg_programmes is populated with fresh titles
-        // when we query uncached-titles on the Worker.
-        // Only runs when both TmdbApiKey and WorkerBaseUrl are configured.
-        if (!string.IsNullOrWhiteSpace(plugin.Configuration.TmdbApiKey) &&
-            !string.IsNullOrWhiteSpace(plugin.Configuration.WorkerBaseUrl))
-        {
-            _logger.LogInformation("[JellyTV] SourceSyncTask: starting TMDB enrichment.");
-            try
+            if (synced)
             {
-                var enrichProgress = new Progress<double>(p =>
-                    progress.Report(60.0 + p * 0.4));
-
-                var summary = await plugin.TmdbEnrichment
-                    .EnrichAsync(enrichProgress, cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (summary.Error is not null)
+                try
                 {
-                    _logger.LogWarning("[JellyTV] SourceSyncTask: enrichment skipped — {Error}", summary.Error);
+                    plugin.SaveConfiguration();
                 }
-                else
+                catch (Exception ex)
                 {
-                    _logger.LogInformation(
-                        "[JellyTV] SourceSyncTask: enrichment done. titles={TitlesFound}, enriched={Enriched}, saved={Saved}, errors={Errors}",
-                        summary.TitlesFound, summary.Enriched, summary.Saved, summary.Errors);
+                    _logger.LogError(ex, "[JellyTV] SourceSyncTask: no se pudo guardar configuración tras el sync.");
                 }
-            }
-            catch (OperationCanceledException)
-            {
-                _logger.LogInformation("[JellyTV] SourceSyncTask: enrichment cancelled.");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "[JellyTV] SourceSyncTask: enrichment failed.");
+
+                if (plugin.Configuration.AutoRefreshGuideOnChange)
+                {
+                    PluginLog.Info("[JellyTV] SourceSyncTask: EPG actualizada; encolando Refresh Guide de Jellyfin.");
+                    GuideRefresh.Queue(_taskManager);
+                }
             }
         }
         else
         {
-            _logger.LogDebug("[JellyTV] SourceSyncTask: TMDB enrichment skipped (TmdbApiKey or WorkerBaseUrl not set).");
+            _logger.LogDebug("[JellyTV] SourceSyncTask: no EPG sources enabled, skipping guide sync.");
         }
 
         progress.Report(100);
     }
 
+    /// <inheritdoc/>
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
     {
         var hours = Plugin.Instance?.Configuration.SourceSyncIntervalHours ?? 24;
@@ -126,7 +122,7 @@ public sealed class SourceSyncTask : IScheduledTask
         [
             new TaskTriggerInfo
             {
-                Type          = TaskTriggerInfoType.IntervalTrigger,
+                Type = TaskTriggerInfoType.IntervalTrigger,
                 IntervalTicks = TimeSpan.FromHours(hours).Ticks
             }
         ];

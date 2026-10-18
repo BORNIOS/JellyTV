@@ -4,11 +4,6 @@ using System.Linq;
 
 namespace Jellyfin.Plugin.JellyTV.Services.Tmdb;
 
-internal interface ITmdbMetadataMapper
-{
-    TmdbMetadata Map(TmdbSearchResult search, TmdbDetailResponse? detail);
-}
-
 internal sealed class TmdbMetadataMapper : ITmdbMetadataMapper
 {
     private const int MaxCastActors = 8;
@@ -89,14 +84,26 @@ internal sealed class TmdbMetadataMapper : ITmdbMetadataMapper
 
     private static string? PickOriginCountry(TmdbDetailResponse detail)
     {
-        if (detail.OriginCountry?.Count > 0) return detail.OriginCountry[0];
-        if (detail.ProductionCountries?.Count > 0) return detail.ProductionCountries[0].Iso31661;
+        if (detail.OriginCountry?.Count > 0)
+        {
+            return detail.OriginCountry[0];
+        }
+
+        if (detail.ProductionCountries?.Count > 0)
+        {
+            return detail.ProductionCountries[0].Iso31661;
+        }
+
         return null;
     }
 
     private static int? ParseYear(string? date)
     {
-        if (string.IsNullOrWhiteSpace(date) || date.Length < 4) return null;
+        if (string.IsNullOrWhiteSpace(date) || date.Length < 4)
+        {
+            return null;
+        }
+
         return int.TryParse(date[..4], out var y) && y > 1880 ? y : null;
     }
 
@@ -147,9 +154,21 @@ internal sealed class TmdbMetadataMapper : ITmdbMetadataMapper
     private static Dictionary<string, string?> BuildExternalIds(TmdbDetailResponse detail)
     {
         var dict = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        if (!string.IsNullOrWhiteSpace(detail.ExternalIds?.ImdbId)) dict["imdb"] = detail.ExternalIds.ImdbId;
-        if (!string.IsNullOrWhiteSpace(detail.ExternalIds?.TvdbId)) dict["tvdb"] = detail.ExternalIds.TvdbId;
-        if (!string.IsNullOrWhiteSpace(detail.ExternalIds?.WikidataId)) dict["wikidata"] = detail.ExternalIds.WikidataId;
+        if (!string.IsNullOrWhiteSpace(detail.ExternalIds?.ImdbId))
+        {
+            dict["imdb"] = detail.ExternalIds.ImdbId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(detail.ExternalIds?.TvdbId))
+        {
+            dict["tvdb"] = detail.ExternalIds.TvdbId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(detail.ExternalIds?.WikidataId))
+        {
+            dict["wikidata"] = detail.ExternalIds.WikidataId;
+        }
+
         return dict;
     }
 

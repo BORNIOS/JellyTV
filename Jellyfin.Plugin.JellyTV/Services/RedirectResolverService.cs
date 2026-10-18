@@ -1,6 +1,6 @@
 using System;
-using System.Net.Http;
 using System.Collections.Generic;
+using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,9 +15,7 @@ namespace Jellyfin.Plugin.JellyTV.Services;
 public class RedirectResolverService
 {
     // Hardcoded constants (not configurable to avoid interference with token renewal logic)
-    private const int MAX_REDIRECTS = 20;
-    private const int REQUEST_TIMEOUT_SECONDS = 30;
-
+    private const int MAXREDIRECTS = 20;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<RedirectResolverService> _logger;
     private readonly ProxyPoolService _proxyPool;
@@ -45,7 +43,7 @@ public class RedirectResolverService
         string originalUrl,
         CancellationToken cancellationToken = default)
     {
-        var maxRedirects = MAX_REDIRECTS;
+        var maxRedirects = MAXREDIRECTS;
 
         // Select one proxy for this entire resolve call (both auto and manual paths share it).
         // proxyKey is non-null only when a healthy proxy was selected.
@@ -130,7 +128,10 @@ public class RedirectResolverService
                 PluginLog.Info($"[RESOLVE] Redirect {redirectCount + 1}: {currentUrl} -> {nextUrl}");
                 // Track the rotation node: the hop that outputs a tokenized redirect destination.
                 if (IsRotationSignal(nextUrl))
+                {
                     rotationNodeUrl = currentUrl;
+                }
+
                 // Record redirect hop
                 redirectChain.Add(nextUrl);
                 currentUrl = nextUrl;
@@ -146,7 +147,9 @@ public class RedirectResolverService
                 if (metaUrl is not null)
                 {
                     if (IsRotationSignal(metaUrl))
+                    {
                         rotationNodeUrl = currentUrl;
+                    }
 
                     _logger.LogDebug("[JellyTV] Meta refresh {Count}: {From} -> {To}", redirectCount + 1, currentUrl, metaUrl);
                     redirectChain.Add(metaUrl);
@@ -156,8 +159,31 @@ public class RedirectResolverService
                     continue;
                 }
 
+                var embeddedUrl = TryExtractEmbeddedPlaybackUrl(html, currentUrl);
+                if (embeddedUrl is not null)
+                {
+                    // Gateway HTML: la pagina embebe el m3u8 tokenizado en
+                    // JS (playbackURL/source/...). Es el salto final con token: NO hacemos
+                    // GET aqui para no consumirlo; HlsRewriterService hara el fetch del playlist.
+                    if (IsRotationSignal(embeddedUrl))
+                    {
+                        rotationNodeUrl = currentUrl;
+                    }
+
+                    _logger.LogDebug("[JellyTV] Embedded HLS {Count}: {From} -> {To}", redirectCount + 1, currentUrl, embeddedUrl);
+                    PluginLog.Info($"[RESOLVE] Embedded HLS in HTML: {currentUrl} -> {embeddedUrl}");
+                    redirectChain.Add(embeddedUrl);
+                    currentUrl = embeddedUrl;
+                    contentType = "application/vnd.apple.mpegurl";
+                    response.Dispose();
+                    break;
+                }
+
                 if (IsHlsUrl(currentUrl, contentType))
+                {
                     initialPlaylistContent = html;
+                }
+
                 response.Dispose();
                 break;
             }
@@ -165,7 +191,7 @@ public class RedirectResolverService
             if (!response.IsSuccessStatusCode)
             {
                 // Some providers return 401/403 for specific proxy egress IPs on intermediate hops
-                // (e.g., api/alfa) even when the direct host path is valid. Retry this same hop once
+                // (e.g., an intermediate API/redirect hop) even when the direct host path is valid. Retry this same hop once
                 // without proxy before failing the whole chain.
                 if (((int)response.StatusCode == 401 || (int)response.StatusCode == 403) && client != directClient)
                 {
@@ -196,9 +222,15 @@ public class RedirectResolverService
             var isTokenized = !string.IsNullOrEmpty(TryExtractTokenFromUrl(currentUrl));
             if (!isTokenized && IsHlsUrl(currentUrl, ct2))
             {
-                try { resolverBodyText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false); }
-                catch { /* non-fatal */ }
+                try
+                {
+                    resolverBodyText = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                { /* non-fatal */
+                }
             }
+
             response.Dispose();
             initialPlaylistContent = resolverBodyText;
             break;
@@ -214,16 +246,20 @@ public class RedirectResolverService
         var tokenExpiry = TryParseTokenExpiry(currentUrl);
         var tokenValue = TryExtractTokenFromUrl(currentUrl);
 
-        // For tokenized streams, use the rotation node (e.g. alfa.7057460.xyz) as poll URL.
-        // GET rotationNode → HTTP→HTTP redirect → tuenisix?freshToken on every poll cycle.
+        // For tokenized streams, use the rotation node as the poll URL.
+        // Each poll follows the redirect chain and obtains a fresh token.
         // This avoids: (a) HTTPS→HTTP block from Chain[0] (jellytv HTTPS origin),
         //              (b) re-using a stale ?token= URL that expired between polls.
         // Falls back to originalUrl if no rotation node was detected (non-standard chain).
         string playlistPollUrl;
         if (!string.IsNullOrEmpty(tokenValue))
+        {
             playlistPollUrl = rotationNodeUrl ?? originalUrl;
+        }
         else
+        {
             playlistPollUrl = currentUrl;
+        }
 
         var resolved = new ResolvedStream
         {
@@ -249,13 +285,19 @@ public class RedirectResolverService
         {
             _logger.LogInformation(
                 "[JellyTV] Resolved to: {FinalUrl} | HLS={IsHls} | TokenExpiry={Expiry} | TokenPresent={TokenPresent}",
-                currentUrl, isHls, tokenExpiry?.ToString("o") ?? "unknown", !string.IsNullOrEmpty(tokenValue));
+                currentUrl,
+                isHls,
+                tokenExpiry?.ToString("o") ?? "unknown",
+                !string.IsNullOrEmpty(tokenValue));
         }
         else
         {
             _logger.LogDebug(
                 "[JellyTV] Resolved to: {FinalUrl} | HLS={IsHls} | TokenExpiry={Expiry} | TokenPresent={TokenPresent}",
-                currentUrl, isHls, tokenExpiry?.ToString("o") ?? "unknown", !string.IsNullOrEmpty(tokenValue));
+                currentUrl,
+                isHls,
+                tokenExpiry?.ToString("o") ?? "unknown",
+                !string.IsNullOrEmpty(tokenValue));
         }
 
         // Write redirect chain to plugin log for diagnostics
@@ -267,7 +309,9 @@ public class RedirectResolverService
                 PluginLog.Info($"[RESOLVE] Chain[{i}] = {redirectChain[i]}");
             }
         }
-        catch { }
+        catch
+        {
+        }
 
         return resolved;
     }
@@ -277,28 +321,88 @@ public class RedirectResolverService
     internal static string? TryExtractMetaRefreshUrl(string html, string baseUrl)
     {
         if (string.IsNullOrWhiteSpace(html) || html.Length > 64 * 1024)
+        {
             return null;
+        }
 
-        var match = Regex.Match(html,
+        var match = Regex.Match(
+            html,
             "<meta\\b[^>]*http-equiv\\s*=\\s*[\\\"']?refresh[\\\"']?[^>]*content\\s*=\\s*[\\\"']?[^>]*?url\\s*=\\s*[\\\"']?([^\\\"' >]+)",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         if (!match.Success)
         {
-            match = Regex.Match(html,
+            match = Regex.Match(
+                html,
                 "<meta\\b[^>]*content\\s*=\\s*[\\\"']?[^>]*?url\\s*=\\s*[\\\"']?([^\\\"' >]+)[^>]*http-equiv\\s*=\\s*[\\\"']?refresh",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
 
         if (!match.Success || !Uri.TryCreate(new Uri(baseUrl), match.Groups[1].Value.Trim(), out var uri))
+        {
             return null;
+        }
 
         return uri.Scheme is "http" or "https" ? uri.ToString() : null;
+    }
+
+    /// <summary>
+    /// Extracts an HLS playback URL embedded in an HTML/JS gateway page, e.g.
+    /// <c>var playbackURL = "https://host/mono.m3u8?token=..."</c>. Some providers
+    /// never 3xx — they hand the tokenized m3u8 inside the body.
+    /// Only absolute http(s) URLs containing ".m3u8" are accepted, which avoids picking
+    /// up unrelated CDN <c>src=</c> script tags. Returns null when none is found.
+    /// </summary>
+    /// <returns></returns>
+    internal static string? TryExtractEmbeddedPlaybackUrl(string html, string baseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(html) || html.Length > 64 * 1024)
+        {
+            return null;
+        }
+
+        // 1) Quoted assignments to playback-ish JS variables (playbackURL, source, ...).
+        var assignment = Regex.Match(
+            html,
+            @"(?:playbackURL|playbackUrl|playback|hlsUrl|streamUrl|stream|videoUrl|source|file|link|src|url)\s*[:=]\s*[""'](?<u>[^""']+)[""']",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        while (assignment.Success)
+        {
+            var url = ResolveHtmlUrl(baseUrl, assignment.Groups["u"].Value);
+            if (url is not null && url.Contains(".m3u8", StringComparison.OrdinalIgnoreCase))
+            {
+                return url;
+            }
+
+            assignment = assignment.NextMatch();
+        }
+
+        // 2) Fallback: the first absolute .m3u8 URL anywhere in the document.
+        var any = Regex.Match(html, @"https?://[^""'\s<>]+?\.m3u8(?:\?[^""'\s<>]*)?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return any.Success ? any.Value : null;
+    }
+
+    private static string? ResolveHtmlUrl(string baseUrl, string raw)
+    {
+        var value = raw.Trim().TrimEnd(';', ',');
+        if (value.Length == 0)
+        {
+            return null;
+        }
+
+        if (Uri.TryCreate(new Uri(baseUrl), value, out var uri) && uri.Scheme is "http" or "https")
+        {
+            return uri.ToString();
+        }
+
+        return null;
     }
 
     private static async Task<string> ReadLimitedBodyAsync(HttpResponseMessage response, CancellationToken ct)
     {
         if (response.Content.Headers.ContentLength is > 64 * 1024)
+        {
             return string.Empty;
+        }
 
         var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         return body.Length <= 64 * 1024 ? body : body[..(64 * 1024)];
@@ -324,9 +428,14 @@ public class RedirectResolverService
                 // Log as INFO so it does not pollute the warning stream on normal operation.
                 var sc = (int)response.StatusCode;
                 if (sc is >= 300 and < 400)
+                {
                     PluginLog.Info($"[RESOLVE-AUTO] Redirect {sc} at {originalUrl}; using manual resolver for cross-scheme chain");
+                }
                 else
+                {
                     PluginLog.Warn($"[RESOLVE-AUTO] Non-success HTTP {sc} at {originalUrl}; falling back to manual resolver");
+                }
+
                 return null;
             }
 
@@ -413,7 +522,9 @@ public class RedirectResolverService
 
             var hlsr = Regex.Match(uri.AbsolutePath, @"/hlsr/([^/?#]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (hlsr.Success)
+            {
                 return hlsr.Groups[1].Value;
+            }
         }
         catch (Exception ex)
         {
@@ -452,14 +563,25 @@ public class RedirectResolverService
     /// </summary>
     private static bool IsRotationSignal(string url)
     {
-        if (url.Contains("?token=", StringComparison.OrdinalIgnoreCase)) return true;
-        if (url.Contains("/hlsr/", StringComparison.OrdinalIgnoreCase)) return true;
+        if (url.Contains("?token=", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (url.Contains("/hlsr/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         try
         {
             var q = new Uri(url).Query;
             return q.Length > 80;
         }
-        catch { return false; }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>

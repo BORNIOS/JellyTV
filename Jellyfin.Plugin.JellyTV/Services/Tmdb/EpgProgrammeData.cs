@@ -7,29 +7,29 @@ namespace Jellyfin.Plugin.JellyTV.Services.Tmdb;
 /// </summary>
 internal sealed class EpgProgrammeData
 {
-    /// <summary>Title in Spanish (or primary EPG language).</summary>
+    /// <summary>Gets title in Spanish (or primary EPG language).</summary>
     public string? TitleEs { get; init; }
 
     /// <summary>
-    /// Title in English — preferred for TMDB search because English coverage
+    /// Gets title in English — preferred for TMDB search because English coverage
     /// is significantly higher and match rates are much better.
     /// </summary>
     public string? TitleEn { get; init; }
 
-    /// <summary>First &lt;desc&gt; element content.</summary>
+    /// <summary>Gets first &lt;desc&gt; element content.</summary>
     public string? Description { get; init; }
 
-    /// <summary>First &lt;category&gt; element content.</summary>
+    /// <summary>Gets first &lt;category&gt; element content.</summary>
     public string? Category { get; init; }
 
-    /// <summary>Year parsed from the first 4 digits of &lt;date&gt;.</summary>
+    /// <summary>Gets year parsed from the first 4 digits of &lt;date&gt;.</summary>
     public int? Year { get; init; }
 
-    /// <summary>src attribute from &lt;icon&gt;, if present.</summary>
+    /// <summary>Gets src attribute from &lt;icon&gt;, if present.</summary>
     public string? ExistingIconUrl { get; init; }
 
     /// <summary>
-    /// Best title for TMDB search: English is used when available because TMDB
+    /// Gets best title for TMDB search: English is used when available because TMDB
     /// results are dramatically more accurate with English titles.
     /// Falls back to the primary (Spanish) title.
     /// </summary>
@@ -38,7 +38,7 @@ internal sealed class EpgProgrammeData
         !string.IsNullOrWhiteSpace(TitleEs) ? TitleEs : string.Empty;
 
     /// <summary>
-    /// Secondary title in the other language, used as an additional TMDB search variant.
+    /// Gets secondary title in the other language, used as an additional TMDB search variant.
     /// Only present when both TitleEn and TitleEs are non-empty.
     /// </summary>
     public string? FallbackTitle =>
@@ -46,7 +46,7 @@ internal sealed class EpgProgrammeData
             ? TitleEs : null;
 
     /// <summary>
-    /// True when the &lt;icon&gt; URL points to image.tmdb.org, meaning the EPG
+    /// Gets a value indicating whether true when the &lt;icon&gt; URL points to image.tmdb.org, meaning the EPG
     /// provider already enriched this programme from TMDB.
     /// </summary>
     public bool HasTmdbIcon =>

@@ -10,17 +10,24 @@ namespace Jellyfin.Plugin.JellyTV;
 /// </summary>
 public static class PluginLog
 {
+    private const int RetentionDays = 5;
+
+    private static readonly object Lock = new();
+
     // Base directory — updated by SetLogDirectory
     private static string _logDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "jellyfin",
         "log");
 
-    private const int RetentionDays = 5;
-    private static readonly object Lock = new();
-
     // Track the last date we wrote to so we rotate and clean up at midnight.
     private static DateTimeOffset _lastWrite = DateTimeOffset.MinValue;
+
+    /// <summary>
+    /// Gets the absolute path of today's log file.
+    /// </summary>
+    public static string CurrentLogPath =>
+        Path.Combine(_logDir, $"JellyTV-{DateTimeOffset.Now:yyyy-MM-dd}.log");
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -29,7 +36,7 @@ public static class PluginLog
     {
         try
         {
-            var now  = DateTimeOffset.Now;
+            var now = DateTimeOffset.Now;
             var line = $"[{now:yyyy-MM-dd HH:mm:ss.fff}] [{level}] {message}{Environment.NewLine}";
             lock (Lock)
             {
@@ -71,8 +78,16 @@ public static class PluginLog
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(dir)) return;
-            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            if (string.IsNullOrWhiteSpace(dir))
+            {
+                return;
+            }
+
+            if (!Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
             _logDir = dir;
         }
         catch
@@ -81,12 +96,6 @@ public static class PluginLog
         }
     }
 
-    /// <summary>
-    /// Gets the absolute path of today's log file.
-    /// </summary>
-    public static string CurrentLogPath =>
-        Path.Combine(_logDir, $"JellyTV-{DateTimeOffset.Now:yyyy-MM-dd}.log");
-
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private static void EnsureDirectory()
@@ -94,9 +103,13 @@ public static class PluginLog
         try
         {
             if (!Directory.Exists(_logDir))
+            {
                 Directory.CreateDirectory(_logDir);
+            }
         }
-        catch { }
+        catch
+        {
+        }
     }
 
     /// <summary>
@@ -113,14 +126,20 @@ public static class PluginLog
                 var name = Path.GetFileNameWithoutExtension(file); // JellyTV-2026-03-27
                 var datePart = name.Length > 8 ? name[^10..] : null;  // last 10 chars = yyyy-MM-dd
                 if (datePart is not null
-                    && DateTimeOffset.TryParseExact(datePart, "yyyy-MM-dd",
-                           null, System.Globalization.DateTimeStyles.None, out var fileDate)
+                    && DateTimeOffset.TryParseExact(
+                        datePart,
+                        "yyyy-MM-dd",
+                        null,
+                        System.Globalization.DateTimeStyles.None,
+                        out var fileDate)
                     && fileDate.Date < cutoff)
                 {
                     File.Delete(file);
                 }
             }
         }
-        catch { }
+        catch
+        {
+        }
     }
 }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Plugin.JellyTV.Controllers;
 using Jellyfin.Plugin.JellyTV.Services;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
@@ -11,24 +12,38 @@ namespace Jellyfin.Plugin.JellyTV.ScheduledTask;
 
 /// <summary>
 /// Scheduled task that performs health checks on all configured channels from all IPTV sources.
-/// Runs on a configurable interval (default: every 24 hours).
-/// Downloads real stream data (HLS playlists + segments or MPEG-TS chunks) to verify each channel.
+/// Cadencia frecuente (minutos). Descarga datos reales de stream para verificar cada canal,
+/// auto-deshabilita los caídos y re-habilita los que regresan. Tras cada corrida regenera el
+/// tuner.m3u con el estado resultante y, si hubo cambios, encola el "Refresh Guide" de Jellyfin.
 /// </summary>
 public class ChannelHealthCheckTask : IScheduledTask
 {
-    private readonly ILogger<ChannelHealthCheckTask> _logger;
+    private static readonly string[] NewLineSeparators = ["\r\n", "\r", "\n"];
 
-    public string Name => "JellyTV: Health Check de Canales";
-    public string Description => "Verifica que todos los canales configurados estén vivos descargando datos reales de stream.";
-    public string Category => "JellyTV";
-    public string Key => "JellyTVChannelHealthCheck";
+    private readonly ILogger<ChannelHealthCheckTask> _logger;
+    private readonly ITaskManager _taskManager;
 
     public ChannelHealthCheckTask(
-        ILogger<ChannelHealthCheckTask> logger)
+        ILogger<ChannelHealthCheckTask> logger,
+        ITaskManager taskManager)
     {
         _logger = logger;
+        _taskManager = taskManager;
     }
 
+    /// <inheritdoc/>
+    public string Name => "JellyTV: Health Check de Canales";
+
+    /// <inheritdoc/>
+    public string Description => "Verifica que todos los canales configurados estén vivos descargando datos reales de stream.";
+
+    /// <inheritdoc/>
+    public string Category => "JellyTV";
+
+    /// <inheritdoc/>
+    public string Key => "JellyTVChannelHealthCheck";
+
+    /// <inheritdoc/>
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
         PluginLog.Info("=== HEALTH CHECK TASK: START ===");
@@ -37,67 +52,52 @@ public class ChannelHealthCheckTask : IScheduledTask
         {
             var config = Plugin.Instance?.Configuration;
             var healthCheck = Plugin.Instance?.ChannelHealthCheck;
-            if (config is null || config.Channels.Count == 0)
+            if (config is null || config.Channels.Count == 0 || healthCheck is null)
             {
-                PluginLog.Warn("[HEALTH-TASK] No sources configured, skipping health check.");
+                PluginLog.Warn("[HEALTH-TASK] Sin canales o servicio de health no disponible; tarea omitida.");
                 return;
             }
 
-            if (healthCheck is null)
+            Plugin.NormalizeChannels();
+
+            // Estado previo para detectar canales deshabilitados/rehabilitados por el health.
+            var before = config.Channels.ToDictionary(
+                c => c.Id,
+                c => (Enabled: c.IsEnabled, AutoDisabled: c.AutoDisabled),
+                StringComparer.Ordinal);
+
+            var (alive, dead, sourcesChecked, sourcesAlive) = await healthCheck
+                .CheckConfiguredChannelsAsync("scheduled", config.Channels, cancellationToken)
+                .ConfigureAwait(false);
+
+            try
             {
-                PluginLog.Warn("[HEALTH-TASK] ChannelHealthCheck service not available, skipping.");
-                return;
+                Plugin.Instance?.SaveConfiguration();
+            }
+            catch
+            {
             }
 
-            var enabledChannels = config.Channels.Where(c => c.IsEnabled && !string.IsNullOrWhiteSpace(c.Url)).ToList();
-            if (!enabledChannels.Any())
+            PluginLog.Info($"[HEALTH-TASK] Health check complete: {alive} canales vivos, {dead} caidos ({sourcesAlive}/{sourcesChecked} fuentes)");
+
+            // Regenerar tuner.m3u con el estado resultante (canales deshabilitados fuera).
+            JellyTVController.RefreshPersistedTunerM3u();
+
+            var changed = config.Channels.Any(c =>
+                before.TryGetValue(c.Id, out var b)
+                && (b.Enabled != c.IsEnabled || b.AutoDisabled != c.AutoDisabled));
+            if (changed && config.AutoRefreshGuideOnChange)
             {
-                PluginLog.Info("[HEALTH-TASK] No enabled channels, skipping health check.");
-                return;
+                PluginLog.Info("[HEALTH-TASK] Cambios de estado detectados; encolando Refresh Guide de Jellyfin.");
+                GuideRefresh.Queue(_taskManager);
             }
-
-            var totalChannels = enabledChannels.Count;
-            var progressIncrement = 1.0 / totalChannels;
-            var currentProgress = 0.0;
-
-            // Check each channel directly
-            var channelUrls = enabledChannels.Select(c => (c.Name, c.Url, c.Type)).ToList();
-            var results = await healthCheck.CheckSourceChannelsAsync("all", channelUrls, cancellationToken).ConfigureAwait(false);
-
-            var alive = results.Count(r => r.IsAlive);
-            var dead = results.Count - alive;
-
-            // Update channel health status in config
-            foreach (var ch in enabledChannels)
+            else if (changed)
             {
-                var result = results.FirstOrDefault(r => r.ChannelUrl == ch.Url);
-                if (result is not null)
-                {
-                    ch.LastCheckAlive = result.IsAlive;
-                    ch.LastCheckedAt = DateTimeOffset.UtcNow;
-                    ch.LastCheckError = result.ErrorMessage;
-                }
-            }
-
-            try { Plugin.Instance?.SaveConfiguration(); } catch { }
-
-            PluginLog.Info($"[HEALTH-TASK] Health check complete: {alive}/{totalChannels} canales vivos");
-
-            // Report results to the Cloudflare Worker for automatic failover
-            var reporter = Plugin.Instance?.WorkerReporter;
-            if (reporter is not null)
-            {
-                await reporter.ReportAsync(results, cancellationToken).ConfigureAwait(false);
-            }
-
-            if (dead > 0)
-            {
-                var deadChannels = string.Join(", ", results.Where(r => !r.IsAlive).Select(r => r.ChannelName).Take(5));
-                PluginLog.Warn($"[HEALTH-TASK] Dead channels: {deadChannels} {(results.Count(r => !r.IsAlive) > 5 ? "..." : "")}");
+                PluginLog.Info("[HEALTH-TASK] Cambios de estado detectados pero auto-refresh de guía está desactivado.");
             }
 
             progress.Report(1.0);
-            PluginLog.Info($"=== HEALTH CHECK TASK: COMPLETE ({totalChannels} canales validados) ===");
+            PluginLog.Info($"=== HEALTH CHECK TASK: COMPLETE ({alive + dead} canales validados, changed={changed}) ===");
         }
         catch (OperationCanceledException)
         {
@@ -131,21 +131,21 @@ public class ChannelHealthCheckTask : IScheduledTask
             }
 
             var content = await client.GetStringAsync(sourceUrl, cts.Token).ConfigureAwait(false);
-            var lines = content.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+            var lines = content.Split(NewLineSeparators, StringSplitOptions.None);
 
             string? currentName = null;
             foreach (var line in lines)
             {
                 var trimmed = line.Trim();
 
-                if (trimmed.StartsWith("#EXTINF:"))
+                if (trimmed.StartsWith("#EXTINF:", StringComparison.Ordinal))
                 {
                     var commaIndex = trimmed.LastIndexOf(',');
                     currentName = commaIndex >= 0 && commaIndex + 1 < trimmed.Length
                         ? trimmed[(commaIndex + 1)..].Trim()
                         : "(Sin nombre)";
                 }
-                else if (!string.IsNullOrEmpty(trimmed) && !trimmed.StartsWith("#"))
+                else if (!string.IsNullOrEmpty(trimmed) && !trimmed.StartsWith('#'))
                 {
                     // This is a URL
                     if (!string.IsNullOrEmpty(currentName))
@@ -165,17 +165,18 @@ public class ChannelHealthCheckTask : IScheduledTask
         return channels;
     }
 
+    /// <inheritdoc/>
     public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
     {
-        var hours = Plugin.Instance?.Configuration?.ChannelHealthCheckIntervalHours ?? 24;
-        hours = Math.Clamp(hours, 1, 168);
+        var minutes = Plugin.Instance?.Configuration?.HealthCheckIntervalMinutes ?? 30;
+        minutes = Math.Clamp(minutes, 5, 1440);
 
         return new[]
         {
             new TaskTriggerInfo
             {
                 Type = TaskTriggerInfoType.IntervalTrigger,
-                IntervalTicks = TimeSpan.FromHours(hours).Ticks,
+                IntervalTicks = TimeSpan.FromMinutes(minutes).Ticks,
             }
         };
     }

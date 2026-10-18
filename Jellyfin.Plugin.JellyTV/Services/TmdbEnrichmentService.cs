@@ -1,33 +1,34 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Net.Http.Json;
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml;
+using System.Xml.Linq;
 using Jellyfin.Plugin.JellyTV.Services.Tmdb;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.JellyTV.Services;
 
 /// <summary>
-/// Orchestrates TMDB enrichment for uncached EPG programmes.
-/// Heavy matching and TMDB IO run in Jellyfin server, Worker only stores cache in D1.
+/// Enriquecimiento TMDB 100% local y con contexto: usa el tipo de canal (sports/news/kids/movies)
+/// para no reclasificar programas (un debate en un canal deportivo no debe volverse "movie"), evita
+/// placeholders del provider y solo inyecta arte/metadata TMDB en canales generales/cine y cuando el
+/// programa no parece una transmisión en vivo. Además garantiza la categoría del canal (p. ej. sports)
+/// cuando el provider no la define.
 /// </summary>
 public sealed class TmdbEnrichmentService
 {
-    private const int BatchChunkSize = 200;
-    private const int UncachedTitlesLimit = 3000;
-
     private static readonly string[] SearchLanguages = ["es-MX", "es-ES", "en-US"];
     private static readonly string[] PreferredOriginalLanguages = ["es", "en", "pt"];
 
-    // Skip content that is usually non-cinematic filler/noise in live EPG.
+    // Saltar contenido que suele ser ruido no cinematográfico en la EPG en vivo.
     private static readonly Regex SkipRe = new(
         @"\b(test\s*card|publicidad|anuncios?|infomercial|paid\s*programming|shopping|teleshopping|sign\s*off|weather|local\s*news|promo|trailer\s*loop|filler|sin\s*informacion|tba|to\s*be\s*announced|programa\s*por\s*definir)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -40,14 +41,24 @@ public sealed class TmdbEnrichmentService
         @"\b(hd|uhd|4k|canal|channel|tv)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    private static readonly HashSet<string> StopWords =
+    [
+        "the", "with", "from", "that", "this", "para", "como", "sobre", "entre", "donde", "cuando", "programa", "episodio", "capitulo"
+    ];
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<TmdbEnrichmentService> _logger;
 
-    private readonly ITmdbNormalizationService _normalizer;
-    private readonly IMatchEvaluator _matchEvaluator;
-    private readonly INegativeCacheService _negativeCache;
-    private readonly ITmdbMetadataMapper _metadataMapper;
+    private readonly TmdbNormalizationService _normalizer;
+    private readonly Tmdb.MatchEvaluator _matchEvaluator;
+    private readonly NegativeCacheService _negativeCache;
+    private readonly TmdbMetadataMapper _metadataMapper;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="TmdbEnrichmentService"/> class.
+    /// </summary>
+    /// <param name="httpClientFactory">Fábrica de clientes HTTP.</param>
+    /// <param name="logger">Logger.</param>
     public TmdbEnrichmentService(
         IHttpClientFactory httpClientFactory,
         ILogger<TmdbEnrichmentService> logger)
@@ -61,131 +72,137 @@ public sealed class TmdbEnrichmentService
         _metadataMapper = new TmdbMetadataMapper();
     }
 
-    public async Task<EnrichmentRunSummary> EnrichAsync(
-        IProgress<double>? progress = null,
-        CancellationToken ct = default)
+    /// <summary>
+    /// Creates a run-scoped context that holds shared state (rate limiter, memory cache,
+    /// TMDB client) across all EPG sources processed in a single sync run.
+    /// </summary>
+    /// <returns>Contexto del run.</returns>
+    internal TmdbEnrichmentRunContext CreateRunContext()
     {
-        var sw = Stopwatch.StartNew();
-        var summary = new EnrichmentRunSummary();
-
         var cfg = Plugin.Instance?.Configuration;
-        if (cfg is null)
+        return new TmdbEnrichmentRunContext(
+            tmdbApiKey: cfg?.TmdbApiKey?.Trim() ?? string.Empty,
+            httpClient: _httpClientFactory.CreateClient("JellyTV"),
+            maxConcurrency: Math.Clamp(cfg?.TmdbMaxConcurrency ?? 6, 1, 24),
+            noMatchTtl: TimeSpan.FromMinutes(Math.Clamp(cfg?.TmdbNoMatchTtlMinutes ?? 180, 5, 1440)),
+            logger: _logger);
+    }
+
+    /// <summary>
+    /// Procesa los programas filtrados de una fuente:
+    /// 1. Normaliza la categoría del canal (sports/news/kids/movies) cuando el provider no la define.
+    /// 2. Solo en canales generales/cine, consulta TMDB y, si el match es seguro y el programa no
+    ///    parece una transmisión en vivo, inyecta arte y metadata.
+    /// Los placeholders (No Data / ayuda del provider) nunca se tocan.
+    /// </summary>
+    /// <param name="records">Programas filtrados (XML editable + contexto de canal).</param>
+    /// <param name="ctx">Contexto del run.</param>
+    /// <param name="ct">Token de cancelación.</param>
+    /// <returns>Estadísticas del enriquecimiento.</returns>
+    internal async Task<EpgEnrichmentStats> EnrichXmlProgrammesAsync(
+        IReadOnlyList<XmlProgrammeRecord> records,
+        TmdbEnrichmentRunContext ctx,
+        CancellationToken ct)
+    {
+        var stats = new EpgEnrichmentStats { ProgrammesInput = records.Count };
+        if (records.Count == 0)
         {
-            summary.Error = "Plugin configuration unavailable";
-            return summary;
+            return stats;
         }
 
-        var tmdbKey = cfg.TmdbApiKey?.Trim() ?? string.Empty;
-        var workerUrl = cfg.WorkerBaseUrl?.TrimEnd('/') ?? string.Empty;
-        var apiKey = cfg.WorkerApiKey?.Trim() ?? string.Empty;
-
-        if (string.IsNullOrWhiteSpace(tmdbKey))
+        // Agrupar por título normalizado (sin placeholders) para no repetir lookups por re-emisiones.
+        var groups = new Dictionary<string, List<XmlProgrammeRecord>>(StringComparer.Ordinal);
+        foreach (var rec in records)
         {
-            summary.Error = "TmdbApiKey not configured";
-            return summary;
+            var title = rec.Data.BestTitle;
+            if (string.IsNullOrWhiteSpace(title)
+                || EpgClassifier.IsPlaceholder(title, rec.Data.Description))
+            {
+                continue;
+            }
+
+            var normalized = _normalizer.NormalizeTitle(title);
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                continue;
+            }
+
+            if (!groups.TryGetValue(normalized, out var list))
+            {
+                list = new List<XmlProgrammeRecord>();
+                groups.Add(normalized, list);
+            }
+
+            list.Add(rec);
         }
 
-        if (string.IsNullOrWhiteSpace(workerUrl))
+        stats.UniqueAfterDedup = groups.Count;
+        if (groups.Count == 0)
         {
-            summary.Error = "WorkerBaseUrl not configured";
-            return summary;
+            return stats;
         }
 
-        if (string.IsNullOrWhiteSpace(apiKey))
-        {
-            summary.Error = "WorkerApiKey not configured";
-            return summary;
-        }
-
-        var programmes = await GetUncachedProgrammesAsync(workerUrl, apiKey, ct).ConfigureAwait(false);
-        if (programmes.Count == 0)
-        {
-            _logger.LogInformation("[JellyTV] TmdbEnrich: no titles need enrichment");
-            progress?.Report(100);
-            return summary;
-        }
-
-        summary.TitlesFound = programmes.Count;
-
-        // Deduplicate by normalized title before hitting TMDB.
-        var unique = new Dictionary<string, UncachedProgrammeItem>(StringComparer.Ordinal);
-        foreach (var p in programmes)
-        {
-            var normalized = _normalizer.NormalizeTitle(p.Title);
-            if (string.IsNullOrWhiteSpace(normalized)) continue;
-            if (!unique.ContainsKey(normalized)) unique[normalized] = p;
-        }
-
-        summary.TitlesUnique = unique.Count;
-        if (unique.Count == 0)
-        {
-            progress?.Report(100);
-            return summary;
-        }
-
-        var memoryCache = new ConcurrentDictionary<string, TmdbMetadata>(StringComparer.Ordinal);
-        var enrichedCount = 0;
-        var errorCount = 0;
-        var skippedByHeuristicsCount = 0;
-        var memoryCacheHitCount = 0;
-        var negativeCacheSkipCount = 0;
-
-        var maxConcurrency = Math.Clamp(cfg.TmdbMaxConcurrency, 1, 24);
-        var noMatchTtl = TimeSpan.FromMinutes(Math.Clamp(cfg.TmdbNoMatchTtlMinutes, 5, 1440));
-
-        var rateLimiter = new SlidingWindowTmdbRateLimiter(maxRequests: 40, window: TimeSpan.FromSeconds(10));
-        var tmdbClient = new TmdbClient(
-            _httpClientFactory.CreateClient("JellyTV"),
-            rateLimiter,
-            _logger);
-
-        var resultRows = new ConcurrentBag<EnrichBatchEntry>();
-        var processed = 0;
+        int enrichedCount = 0, skippedCount = 0, memoryCacheHitCount = 0;
+        int negativeCacheSkipCount = 0, noMatchCount = 0, errorCount = 0;
 
         await Parallel.ForEachAsync(
-            unique,
-            new ParallelOptions { MaxDegreeOfParallelism = maxConcurrency, CancellationToken = ct },
+            groups,
+            new ParallelOptions { MaxDegreeOfParallelism = ctx.MaxConcurrency, CancellationToken = ct },
             async (kv, token) =>
             {
                 var normalizedTitle = kv.Key;
-                var item = kv.Value;
+                var recList = kv.Value;
+                var item = ToItem(recList[0].Data);
                 try
                 {
                     if (ShouldSkip(item.Title))
                     {
-                        Interlocked.Increment(ref skippedByHeuristicsCount);
+                        Interlocked.Increment(ref skippedCount);
                         return;
                     }
 
-                    if (memoryCache.TryGetValue(normalizedTitle, out var cached))
+                    // TMDB solo aporta valor en canales generales/cine; en deportivos/noticias/kids
+                    // el riesgo de reclasificar (p. ej. "movie/Terror" en un debate) es demasiado alto.
+                    var representative = recList[0];
+                    var wantsTmdb = representative.Kind is ChannelKind.General or ChannelKind.Movies;
+
+                    var meta = TmdbMetadata.NoMatch;
+                    if (wantsTmdb)
                     {
-                        Interlocked.Increment(ref memoryCacheHitCount);
-                        if (cached.IsMatch)
+                        if (ctx.MemoryCache.TryGetValue(normalizedTitle, out var cached))
                         {
-                            resultRows.Add(ToBatchEntry(normalizedTitle, cached));
+                            Interlocked.Increment(ref memoryCacheHitCount);
+                            meta = cached;
+                        }
+                        else if (_negativeCache.ShouldSkip(normalizedTitle, DateTimeOffset.UtcNow))
+                        {
+                            Interlocked.Increment(ref negativeCacheSkipCount);
+                            meta = TmdbMetadata.NoMatch;
+                            ctx.MemoryCache[normalizedTitle] = meta;
+                        }
+                        else
+                        {
+                            meta = await LookupTmdbAsync(item, ctx.TmdbApiKey, ctx.TmdbClient, token).ConfigureAwait(false);
+                            ctx.MemoryCache[normalizedTitle] = meta;
+                            if (!meta.IsMatch)
+                            {
+                                _negativeCache.MarkNoMatch(normalizedTitle, DateTimeOffset.UtcNow, ctx.NoMatchTtl);
+                                Interlocked.Increment(ref noMatchCount);
+                            }
+                        }
+                    }
+
+                    var effectiveMeta = wantsTmdb && meta.IsMatch ? meta : null;
+
+                    foreach (var rec in recList)
+                    {
+                        var rewritten = RewriteProgrammeFragment(rec, effectiveMeta);
+                        if (rewritten is not null)
+                        {
+                            rec.Xml = rewritten;
                             Interlocked.Increment(ref enrichedCount);
                         }
-                        return;
                     }
-
-                    if (_negativeCache.ShouldSkip(normalizedTitle, DateTimeOffset.UtcNow))
-                    {
-                        Interlocked.Increment(ref negativeCacheSkipCount);
-                        memoryCache[normalizedTitle] = TmdbMetadata.NoMatch;
-                        return;
-                    }
-
-                    var meta = await LookupTmdbAsync(item, tmdbKey, tmdbClient, token).ConfigureAwait(false);
-                    memoryCache[normalizedTitle] = meta;
-
-                    if (!meta.IsMatch)
-                    {
-                        _negativeCache.MarkNoMatch(normalizedTitle, DateTimeOffset.UtcNow, noMatchTtl);
-                        return;
-                    }
-
-                    resultRows.Add(ToBatchEntry(normalizedTitle, meta));
-                    Interlocked.Increment(ref enrichedCount);
                 }
                 catch (OperationCanceledException)
                 {
@@ -193,70 +210,216 @@ public sealed class TmdbEnrichmentService
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "[JellyTV] TmdbEnrich: failed for title '{Title}'", item.Title);
+                    _logger.LogWarning(ex, "[JellyTV] TmdbEnrich: error enriching '{Title}'", item.Title);
                     Interlocked.Increment(ref errorCount);
-                }
-                finally
-                {
-                    var done = Interlocked.Increment(ref processed);
-                    progress?.Report(10.0 + (done / (double)unique.Count) * 80.0);
                 }
             }).ConfigureAwait(false);
 
-        summary.Enriched = enrichedCount;
-        summary.Errors = errorCount;
-        summary.SkippedByHeuristics = skippedByHeuristicsCount;
-        summary.MemoryCacheHits = memoryCacheHitCount;
-        summary.NegativeCacheSkips = negativeCacheSkipCount;
+        stats.Enriched = enrichedCount;
+        stats.SkippedByHeuristics = skippedCount;
+        stats.MemoryCacheHits = memoryCacheHitCount;
+        stats.NegativeCacheSkips = negativeCacheSkipCount;
+        stats.NoMatch = noMatchCount;
+        stats.Errors = errorCount;
+        stats.TmdbRequests = ctx.TmdbClient.Metrics.Requests;
+        stats.Retries = ctx.TmdbClient.Metrics.Retries;
 
-        var batches = resultRows
-            .Where(r => r.TmdbId.HasValue)
-            .DistinctBy(r => r.TitleNormalized)
-            .Chunk(BatchChunkSize)
-            .ToList();
+        _logger.LogInformation(
+            "[JellyTV] TmdbEnrich done: programmes={Programmes} unique={Unique} enriched={Enriched} errors={Errors} tmdbReq={TmdbReq} retries={Retries}",
+            stats.ProgrammesInput,
+            stats.UniqueAfterDedup,
+            stats.Enriched,
+            stats.Errors,
+            stats.TmdbRequests,
+            stats.Retries);
 
-        foreach (var batch in batches)
+        return stats;
+    }
+
+    /// <summary>
+    /// Reescribe un &lt;programme&gt; según el contexto:
+    /// - Añade la categoría del tipo de canal (sports/news/kids/movies) si el provider no la trae.
+    /// - Si <paramref name="meta"/> trae un match TMDB válido y el programa no parece una transmisión
+    ///   en vivo, inyecta arte (backdrop/poster), descripción corta, categorías y créditos.
+    /// Devuelve null si no hay cambios.
+    /// </summary>
+    /// <param name="rec">Registro del programa (XML + metadatos + contexto).</param>
+    /// <param name="meta">Metadata TMDB con match, o null si no aplica.</param>
+    /// <returns>XML reescrito o null.</returns>
+    private static string? RewriteProgrammeFragment(XmlProgrammeRecord rec, TmdbMetadata? meta)
+    {
+        var data = rec.Data;
+
+        // Si la fuente ya enriqueció este programa desde TMDB, no lo tocamos.
+        if (data.HasTmdbIcon)
         {
-            ct.ThrowIfCancellationRequested();
-            try
+            return null;
+        }
+
+        XDocument doc;
+        try
+        {
+            doc = XDocument.Parse(rec.Xml, LoadOptions.PreserveWhitespace);
+        }
+        catch
+        {
+            return null;
+        }
+
+        var programme = doc.Root;
+        if (programme is null)
+        {
+            return null;
+        }
+
+        var changed = false;
+
+        // 1) Categoría base según el tipo de canal (lo que colorea la guía de Jellyfin).
+        var bucket = rec.Kind switch
+        {
+            ChannelKind.Sports => "sports",
+            ChannelKind.News => "news",
+            ChannelKind.Kids => "kids",
+            ChannelKind.Movies => "movie",
+            _ => null
+        };
+
+        if (bucket is not null)
+        {
+            var hasBucket = programme.Elements("category")
+                .Any(c => string.Equals(c.Value.Trim(), bucket, StringComparison.OrdinalIgnoreCase));
+            if (!hasBucket)
             {
-                summary.Saved += await PushEnrichBatchAsync(workerUrl, apiKey, batch, ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.LogError(ex, "[JellyTV] TmdbEnrich: failed to push batch of {Count}", batch.Length);
-                summary.PushErrors += batch.Length;
+                programme.Add(new XElement("category", bucket));
+                changed = true;
             }
         }
 
-        summary.TmdbRequests = tmdbClient.Metrics.Requests;
-        summary.RetryCount = tmdbClient.Metrics.Retries;
-        summary.RateLimitWaits = rateLimiter.WaitEvents;
+        // 2) Enriquecimiento TMDB solo cuando aplica y no parece en vivo/show.
+        if (meta is not null
+            && meta.IsMatch
+            && !EpgClassifier.LooksLikeLiveShow(data.BestTitle, data.Description))
+        {
+            var imageUrl = BuildImageUrl(meta.BackdropPath, "w1280") ?? BuildImageUrl(meta.PosterPath, "w500");
+            if (!string.IsNullOrEmpty(imageUrl))
+            {
+                programme.Elements("icon").Remove();
+                programme.Add(new XElement("icon", new XAttribute("src", imageUrl)));
+                changed = true;
+            }
 
-        sw.Stop();
-        var hitRate = summary.TitlesUnique == 0 ? 0 : (double)summary.Enriched / summary.TitlesUnique;
-        var missRate = 1 - hitRate;
-        var avgLatency = summary.TmdbRequests == 0 ? 0 : sw.Elapsed.TotalMilliseconds / summary.TmdbRequests;
+            var overview = meta.Overview;
+            if (!string.IsNullOrWhiteSpace(overview))
+            {
+                var descs = programme.Elements("desc").ToList();
+                var target = descs.FirstOrDefault(d => string.Equals(
+                    (string?)d.Attribute("lang"), "es", StringComparison.OrdinalIgnoreCase)) ?? descs.FirstOrDefault();
 
-        _logger.LogInformation(
-            "[JellyTV] TmdbEnrich done: found={Found} unique={Unique} enriched={Enriched} saved={Saved} errors={Errors} pushErrors={PushErrors} hitRate={HitRate:P1} missRate={MissRate:P1} tmdbReq={TmdbReq} retries={Retries} rlWaits={RlWaits} avgReqMs={AvgReqMs:F1} elapsedMs={Elapsed}",
-            summary.TitlesFound,
-            summary.TitlesUnique,
-            summary.Enriched,
-            summary.Saved,
-            summary.Errors,
-            summary.PushErrors,
-            hitRate,
-            missRate,
-            summary.TmdbRequests,
-            summary.RetryCount,
-            summary.RateLimitWaits,
-            avgLatency,
-            sw.ElapsedMilliseconds);
+                if (target is null)
+                {
+                    programme.Add(new XElement("desc", new XAttribute("lang", "es"), overview));
+                    changed = true;
+                }
+                else
+                {
+                    var current = target.Value.Trim();
+                    if (current.Length < 40 && overview.Length > current.Length)
+                    {
+                        target.Value = overview;
+                        changed = true;
+                    }
+                }
+            }
 
-        progress?.Report(100);
-        return summary;
+            var existingCats = new HashSet<string>(
+                programme.Elements("category").Select(c => (c.Value ?? string.Empty).Trim()),
+                StringComparer.OrdinalIgnoreCase);
+
+            var mediaTypeCat = meta.MediaType == "movie" ? "movie" : meta.MediaType == "tv" ? "series" : null;
+            if (mediaTypeCat is not null && existingCats.Add(mediaTypeCat))
+            {
+                programme.Add(new XElement("category", mediaTypeCat));
+                changed = true;
+            }
+
+            foreach (var genre in meta.Genres)
+            {
+                if (string.IsNullOrWhiteSpace(genre) || existingCats.Count >= 8)
+                {
+                    break;
+                }
+
+                if (existingCats.Add(genre))
+                {
+                    programme.Add(new XElement("category", genre));
+                    changed = true;
+                }
+            }
+
+            if (programme.Element("credits") is null && meta.Cast.Count > 0)
+            {
+                var credits = new XElement("credits");
+                foreach (var member in meta.Cast)
+                {
+                    if (string.Equals(member.Role, "director", StringComparison.OrdinalIgnoreCase))
+                    {
+                        credits.Add(new XElement("director", member.Name));
+                    }
+                }
+
+                foreach (var member in meta.Cast.Take(6))
+                {
+                    if (!string.Equals(member.Role, "director", StringComparison.OrdinalIgnoreCase))
+                    {
+                        credits.Add(new XElement("actor", member.Name));
+                    }
+                }
+
+                if (credits.HasElements)
+                {
+                    programme.Add(credits);
+                    changed = true;
+                }
+            }
+        }
+
+        if (!changed)
+        {
+            return null;
+        }
+
+        using var sw = new StringWriter(CultureInfo.InvariantCulture);
+        using (var xw = XmlWriter.Create(sw, new XmlWriterSettings { OmitXmlDeclaration = true, Indent = false }))
+        {
+            doc.WriteTo(xw);
+        }
+
+        return sw.ToString();
     }
+
+    /// <summary>
+    /// Construye la URL completa hacia image.tmdb.org para un path relativo y un ancho dados.
+    /// </summary>
+    /// <param name="path">Path relativo (p. ej. /abc.jpg) o null.</param>
+    /// <param name="width">Ancho TMDB (p. ej. w500, w1280).</param>
+    /// <returns>URL completa o null.</returns>
+    private static string? BuildImageUrl(string? path, string width)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        return "https://image.tmdb.org/t/p/" + width + path;
+    }
+
+    /// <summary>
+    /// Convierte los metadatos ricos de un programa en el item que consume el buscador TMDB.
+    /// </summary>
+    /// <param name="p">Metadatos del programa.</param>
+    /// <returns>Item de búsqueda.</returns>
+    private static UncachedProgrammeItem ToItem(EpgProgrammeData p)
+        => new(p.BestTitle, p.Description, p.Category, p.Year, p.FallbackTitle);
 
     private async Task<TmdbMetadata> LookupTmdbAsync(
         UncachedProgrammeItem item,
@@ -276,10 +439,16 @@ public sealed class TmdbEnrichmentService
 
                 var search = await client.SearchMultiAsync(apiKey, query, language, ct).ConfigureAwait(false);
                 var results = search?.Results ?? [];
-                if (results.Count == 0) continue;
+                if (results.Count == 0)
+                {
+                    continue;
+                }
 
                 var candidate = _matchEvaluator.SelectBest(item, results, PreferredOriginalLanguages);
-                if (candidate == null) continue;
+                if (candidate == null)
+                {
+                    continue;
+                }
 
                 if (best == null || candidate.Score > best.Score)
                 {
@@ -296,7 +465,10 @@ public sealed class TmdbEnrichmentService
         }
 
         var mediaType = best.Candidate.MediaType;
-        if (string.IsNullOrWhiteSpace(mediaType)) return TmdbMetadata.NoMatch;
+        if (string.IsNullOrWhiteSpace(mediaType))
+        {
+            return TmdbMetadata.NoMatch;
+        }
 
         var detail = await client.GetDetailAsync(apiKey, mediaType, best.Candidate.Id, bestLanguage, ct).ConfigureAwait(false);
         var mapped = _metadataMapper.Map(best.Candidate, detail);
@@ -312,7 +484,7 @@ public sealed class TmdbEnrichmentService
         return mapped;
     }
 
-    private IEnumerable<string> BuildQueryVariants(UncachedProgrammeItem item)
+    private HashSet<string> BuildQueryVariants(UncachedProgrammeItem item)
     {
         var title = item.Title.Trim();
         var normalized = _normalizer.NormalizeTitle(title);
@@ -320,9 +492,17 @@ public sealed class TmdbEnrichmentService
         var variants = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         void Add(string? v)
         {
-            if (string.IsNullOrWhiteSpace(v)) return;
+            if (string.IsNullOrWhiteSpace(v))
+            {
+                return;
+            }
+
             var trimmed = v.Trim();
-            if (trimmed.Length < 2) return;
+            if (trimmed.Length < 2)
+            {
+                return;
+            }
+
             variants.Add(trimmed);
         }
 
@@ -357,14 +537,15 @@ public sealed class TmdbEnrichmentService
             }
         }
 
-        // Add the secondary language title (e.g. Spanish when primary is English)
-        // as additional search variants — critical for titles only known in one language.
+        // Título secundario (p. ej. español cuando el principal es inglés) como variante adicional.
         if (!string.IsNullOrWhiteSpace(item.FallbackTitle))
         {
             Add(item.FallbackTitle);
             Add(_normalizer.NormalizeTitle(item.FallbackTitle));
             if (item.Year.HasValue)
+            {
                 Add($"{item.FallbackTitle} {item.Year.Value}");
+            }
         }
 
         return variants;
@@ -382,24 +563,34 @@ public sealed class TmdbEnrichmentService
             .ToArray();
     }
 
-    private static readonly HashSet<string> StopWords =
-    [
-        "the", "with", "from", "that", "this", "para", "como", "sobre", "entre", "donde", "cuando", "programa", "episodio", "capitulo"
-    ];
-
     private static int? ExtractYear(string text)
     {
         var m = Regex.Match(text, @"\b(19|20)\d{2}\b");
-        if (!m.Success) return null;
+        if (!m.Success)
+        {
+            return null;
+        }
+
         return int.TryParse(m.Value, out var y) ? y : null;
     }
 
     private static bool ShouldSkip(string title)
     {
         var t = title.Trim();
-        if (t.Length < 3) return true;
-        if (TimestampLikeRe.IsMatch(t)) return true;
-        if (SkipRe.IsMatch(t)) return true;
+        if (t.Length < 3)
+        {
+            return true;
+        }
+
+        if (TimestampLikeRe.IsMatch(t))
+        {
+            return true;
+        }
+
+        if (SkipRe.IsMatch(t))
+        {
+            return true;
+        }
 
         if (ChannelLikeRe.IsMatch(t) && t.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 2)
         {
@@ -408,306 +599,4 @@ public sealed class TmdbEnrichmentService
 
         return false;
     }
-
-    private EnrichBatchEntry ToBatchEntry(string normalizedTitle, TmdbMetadata meta)
-    {
-        return new EnrichBatchEntry
-        {
-            TitleNormalized = normalizedTitle,
-            TmdbId = meta.TmdbId,
-            MediaType = meta.MediaType,
-            Overview = meta.Overview,
-            PosterPath = meta.PosterPath,
-            BackdropPath = meta.BackdropPath,
-            LogoPath = meta.LogoPath,
-            Genres = meta.Genres,
-            Cast = meta.Cast,
-            OriginCountry = meta.OriginCountry,
-            ReleaseYear = meta.ReleaseYear,
-            Tagline = meta.Tagline,
-            ImdbId = meta.ImdbId,
-            Runtime = meta.Runtime,
-            VoteAverage = meta.VoteAverage,
-            VoteCount = meta.VoteCount,
-            Popularity = meta.Popularity,
-            OriginalLanguage = meta.OriginalLanguage,
-            ProductionCompanies = meta.ProductionCompanies,
-            ReleaseDate = meta.ReleaseDate,
-            Trailers = meta.Trailers,
-            Certifications = meta.Certifications,
-            NumberOfSeasons = meta.NumberOfSeasons,
-            NumberOfEpisodes = meta.NumberOfEpisodes,
-            Networks = meta.Networks,
-            Status = meta.Status,
-            EpisodeRuntimes = meta.EpisodeRuntimes,
-            CreatedBy = meta.CreatedBy,
-            ExternalIds = meta.ExternalIds,
-            Translations = meta.Translations,
-            AlternativeTitles = meta.AlternativeTitles,
-            Keywords = meta.Keywords
-        };
-    }
-
-    private async Task<List<UncachedProgrammeItem>> GetUncachedProgrammesAsync(
-        string workerUrl,
-        string apiKey,
-        CancellationToken ct)
-    {
-        var client = _httpClientFactory.CreateClient("JellyTV");
-        var url = $"{workerUrl}/api/epg/uncached-titles?limit={UncachedTitlesLimit}";
-
-        using var req = new HttpRequestMessage(HttpMethod.Get, url);
-        req.Headers.Add("x-api-key", apiKey);
-
-        try
-        {
-            using var resp = await client.SendAsync(req, ct).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode)
-            {
-                _logger.LogWarning("[JellyTV] TmdbEnrich: uncached-titles returned {Status}", (int)resp.StatusCode);
-                return [];
-            }
-
-            var body = await resp.Content.ReadFromJsonAsync<UncachedTitlesResponse>(cancellationToken: ct).ConfigureAwait(false);
-            if (body?.Data == null) return [];
-
-            // Backward-compatible: old Worker returns titles[], new Worker may return programmes[].
-            if (body.Data.Programmes?.Count > 0)
-            {
-                return body.Data.Programmes
-                    .Where(x => !string.IsNullOrWhiteSpace(x.Title))
-                    .Select(x => new UncachedProgrammeItem(x.Title!, x.Description, x.Category, x.Year))
-                    .ToList();
-            }
-
-            return (body.Data.Titles ?? [])
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Select(x => new UncachedProgrammeItem(x.Trim()))
-                .ToList();
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogError(ex, "[JellyTV] TmdbEnrich: failed to fetch uncached titles");
-            return [];
-        }
-    }
-
-    private async Task<int> PushEnrichBatchAsync(
-        string workerUrl,
-        string apiKey,
-        IEnumerable<EnrichBatchEntry> entries,
-        CancellationToken ct)
-    {
-        var client = _httpClientFactory.CreateClient("JellyTV");
-        var url = $"{workerUrl}/api/epg/enrich-batch";
-        var payload = JsonSerializer.Serialize(
-            new { entries },
-            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
-
-        using var req = new HttpRequestMessage(HttpMethod.Post, url);
-        req.Headers.Add("x-api-key", apiKey);
-        req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
-
-        using var resp = await client.SendAsync(req, ct).ConfigureAwait(false);
-        resp.EnsureSuccessStatusCode();
-
-        var body = await resp.Content.ReadFromJsonAsync<EnrichBatchResponse>(cancellationToken: ct).ConfigureAwait(false);
-        return body?.Data?.Saved ?? 0;
-    }
-
-    // ── Inline EPG enrichment API ──────────────────────────────────────────────
-
-    /// <summary>
-    /// Creates a run-scoped context that holds shared state (rate limiter, memory cache,
-    /// TMDB client) across multiple calls to <see cref="EnrichProgrammesAsync"/>.
-    /// Create once per sync run and reuse for every EPG source processed in that run.
-    /// </summary>
-    internal TmdbEnrichmentRunContext CreateRunContext()
-    {
-        var cfg = Plugin.Instance?.Configuration;
-        return new TmdbEnrichmentRunContext(
-            tmdbApiKey:     cfg?.TmdbApiKey?.Trim() ?? string.Empty,
-            httpClient:     _httpClientFactory.CreateClient("JellyTV"),
-            maxConcurrency: Math.Clamp(cfg?.TmdbMaxConcurrency ?? 6, 1, 24),
-            noMatchTtl:     TimeSpan.FromMinutes(Math.Clamp(cfg?.TmdbNoMatchTtlMinutes ?? 180, 5, 1440)),
-            logger:         _logger);
-    }
-
-    /// <summary>
-    /// Enriches a list of EPG programmes with TMDB metadata using the rich inline data
-    /// (English title, Spanish title, description, year, category) extracted during XMLTV filtering.
-    /// Returns the enrichment stats and the batch entries ready to push to the Worker.
-    /// </summary>
-    internal async Task<(EpgEnrichmentStats Stats, List<EnrichBatchEntry> Entries)> EnrichProgrammesAsync(
-        IReadOnlyList<EpgProgrammeData> programmes,
-        TmdbEnrichmentRunContext ctx,
-        CancellationToken ct)
-    {
-        var stats = new EpgEnrichmentStats { ProgrammesInput = programmes.Count };
-        if (programmes.Count == 0) return (stats, []);
-
-        // Deduplicate by normalized BestTitle (English preferred for better TMDB coverage).
-        var unique = new Dictionary<string, UncachedProgrammeItem>(StringComparer.Ordinal);
-        foreach (var p in programmes)
-        {
-            var title = p.BestTitle;
-            if (string.IsNullOrWhiteSpace(title)) continue;
-            var normalized = _normalizer.NormalizeTitle(title);
-            if (string.IsNullOrWhiteSpace(normalized)) continue;
-            unique.TryAdd(normalized, new UncachedProgrammeItem(
-                title, p.Description, p.Category, p.Year, p.FallbackTitle));
-        }
-
-        stats.UniqueAfterDedup = unique.Count;
-        if (unique.Count == 0) return (stats, []);
-
-        var resultRows = new ConcurrentBag<EnrichBatchEntry>();
-        int enrichedCount = 0, skippedCount = 0, memoryCacheHitCount = 0;
-        int negativeCacheSkipCount = 0, noMatchCount = 0, errorCount = 0;
-
-        await Parallel.ForEachAsync(
-            unique,
-            new ParallelOptions { MaxDegreeOfParallelism = ctx.MaxConcurrency, CancellationToken = ct },
-            async (kv, token) =>
-            {
-                var normalizedTitle = kv.Key;
-                var item = kv.Value;
-                try
-                {
-                    if (ShouldSkip(item.Title))
-                    {
-                        Interlocked.Increment(ref skippedCount);
-                        return;
-                    }
-
-                    if (ctx.MemoryCache.TryGetValue(normalizedTitle, out var cached))
-                    {
-                        Interlocked.Increment(ref memoryCacheHitCount);
-                        if (cached.IsMatch)
-                        {
-                            resultRows.Add(ToBatchEntry(normalizedTitle, cached));
-                            Interlocked.Increment(ref enrichedCount);
-                        }
-                        return;
-                    }
-
-                    if (_negativeCache.ShouldSkip(normalizedTitle, DateTimeOffset.UtcNow))
-                    {
-                        Interlocked.Increment(ref negativeCacheSkipCount);
-                        ctx.MemoryCache[normalizedTitle] = TmdbMetadata.NoMatch;
-                        return;
-                    }
-
-                    var meta = await LookupTmdbAsync(item, ctx.TmdbApiKey, ctx.TmdbClient, token).ConfigureAwait(false);
-                    ctx.MemoryCache[normalizedTitle] = meta;
-
-                    if (!meta.IsMatch)
-                    {
-                        _negativeCache.MarkNoMatch(normalizedTitle, DateTimeOffset.UtcNow, ctx.NoMatchTtl);
-                        Interlocked.Increment(ref noMatchCount);
-                        return;
-                    }
-
-                    resultRows.Add(ToBatchEntry(normalizedTitle, meta));
-                    Interlocked.Increment(ref enrichedCount);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "[JellyTV] TmdbEnrich: error enriching '{Title}'", item.Title);
-                    Interlocked.Increment(ref errorCount);
-                }
-            }).ConfigureAwait(false);
-
-        stats.Enriched            = enrichedCount;
-        stats.SkippedByHeuristics = skippedCount;
-        stats.MemoryCacheHits     = memoryCacheHitCount;
-        stats.NegativeCacheSkips  = negativeCacheSkipCount;
-        stats.NoMatch             = noMatchCount;
-        stats.Errors              = errorCount;
-        stats.TmdbRequests        = ctx.TmdbClient.Metrics.Requests;
-        stats.Retries             = ctx.TmdbClient.Metrics.Retries;
-
-        var entries = resultRows
-            .Where(r => r.TmdbId.HasValue)
-            .DistinctBy(r => r.TitleNormalized)
-            .ToList();
-
-        return (stats, entries);
-    }
-
-    /// <summary>
-    /// Pushes a batch of enrichment entries to the Worker's /api/epg/enrich-batch endpoint.
-    /// Accessible from <see cref="EpgFilterService"/> for inline pushes after each EPG source.
-    /// </summary>
-    internal Task<int> PushEnrichBatchToWorkerAsync(
-        string workerUrl, string? apiKey, IEnumerable<EnrichBatchEntry> entries, CancellationToken ct)
-        => PushEnrichBatchAsync(workerUrl, apiKey ?? string.Empty, entries, ct);
-}
-
-internal sealed class UncachedTitlesResponse
-{
-    public UncachedTitlesData? Data { get; set; }
-}
-
-internal sealed class UncachedTitlesData
-{
-    public List<string>? Titles { get; set; }
-    public List<UncachedProgrammeDto>? Programmes { get; set; }
-}
-
-internal sealed class UncachedProgrammeDto
-{
-    public string? Title { get; set; }
-    public string? Description { get; set; }
-    public string? Category { get; set; }
-    public int? Year { get; set; }
-}
-
-// ── Run-scoped shared state for inline enrichment ─────────────────────────────
-
-/// <summary>
-/// Holds per-run shared resources (rate limiter, memory cache, TMDB client) so that
-/// all EPG sources processed during a single sync run share the same sliding-window
-/// rate limit and avoid redundant TMDB lookups for titles appearing in multiple sources.
-/// Create once via <see cref="TmdbEnrichmentService.CreateRunContext"/> and pass to
-/// every <see cref="TmdbEnrichmentService.EnrichProgrammesAsync"/> call in the run.
-/// </summary>
-internal sealed class TmdbEnrichmentRunContext
-{
-    internal ConcurrentDictionary<string, TmdbMetadata> MemoryCache { get; }
-        = new(StringComparer.Ordinal);
-
-    internal SlidingWindowTmdbRateLimiter RateLimiter { get; }
-    internal ITmdbClient TmdbClient { get; }
-    internal int MaxConcurrency { get; }
-    internal TimeSpan NoMatchTtl { get; }
-    internal string TmdbApiKey { get; }
-
-    internal TmdbEnrichmentRunContext(
-        string tmdbApiKey,
-        HttpClient httpClient,
-        int maxConcurrency,
-        TimeSpan noMatchTtl,
-        ILogger logger)
-    {
-        TmdbApiKey     = tmdbApiKey;
-        MaxConcurrency = maxConcurrency;
-        NoMatchTtl     = noMatchTtl;
-        RateLimiter    = new SlidingWindowTmdbRateLimiter(maxRequests: 40, window: TimeSpan.FromSeconds(10));
-        TmdbClient     = new TmdbClient(httpClient, RateLimiter, logger);
-    }
-}
-
-internal sealed class EnrichBatchResponse
-{
-    public EnrichBatchData? Data { get; set; }
-}
-
-internal sealed class EnrichBatchData
-{
-    public int Saved { get; set; }
 }

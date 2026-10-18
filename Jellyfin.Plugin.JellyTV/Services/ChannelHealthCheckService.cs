@@ -22,6 +22,18 @@ namespace Jellyfin.Plugin.JellyTV.Services;
 /// </summary>
 public class ChannelHealthCheckService
 {
+    // Hardcoded constants
+    private const int CACHETTLMINUTES = 30;
+    private const int MAXBYTESTODOWNLOAD = 5_000_000; // 5 MB max per fallback check
+    private const int MINBYTESFORSUCCESS = 200_000;   // 200 KB minimum to consider "alive"
+    private const int RESOLVETIMEOUTSECONDS = 20;
+    private const int REQUESTTIMEOUTSECONDS = 30;
+    private const int FFMPEGTIMEOUTSECONDS = 18;
+    private const int FFMPEGNETWORKTIMEOUTMICROSECONDS = 5_000_000;
+    private const int FFMPEGPROBEDURATIONSECONDS = 2;
+
+    private static readonly string[] NewLineSeparators = ["\r\n", "\r", "\n"];
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<ChannelHealthCheckService> _logger;
     private readonly SessionManagerService _sessionManager;
@@ -29,16 +41,6 @@ public class ChannelHealthCheckService
 
     // In-memory cache: key = ChannelUrl, value = (ChannelHealthStatus, CachedAt)
     private readonly ConcurrentDictionary<string, (ChannelHealthStatus, DateTimeOffset)> _healthCache = new();
-
-    // Hardcoded constants
-    private const int CACHE_TTL_MINUTES = 30;
-    private const int MAX_BYTES_TO_DOWNLOAD = 5_000_000; // 5 MB max per fallback check
-    private const int MIN_BYTES_FOR_SUCCESS = 200_000;   // 200 KB minimum to consider "alive"
-    private const int RESOLVE_TIMEOUT_SECONDS = 20;
-    private const int REQUEST_TIMEOUT_SECONDS = 30;
-    private const int FFMPEG_TIMEOUT_SECONDS = 18;
-    private const int FFMPEG_NETWORK_TIMEOUT_MICROSECONDS = 5_000_000;
-    private const int FFMPEG_PROBE_DURATION_SECONDS = 2;
 
     private string? _ffmpegPath;
     private DateTimeOffset _lastFfmpegCheck = DateTimeOffset.MinValue;
@@ -59,7 +61,13 @@ public class ChannelHealthCheckService
     /// Checks health of a single channel. Direct streams use a quick HTTP check;
     /// tokenized streams go through full session resolution + ffmpeg + fallback.
     /// </summary>
-    public async Task<ChannelHealthStatus> CheckChannelAsync(string channelName, string channelUrl, int channelType = 0, CancellationToken ct = default)
+    /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
+    public async Task<ChannelHealthStatus> CheckChannelAsync(
+        string channelName,
+        string channelUrl,
+        int channelType = 0,
+        bool forceRefresh = false,
+        CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(channelUrl))
         {
@@ -74,10 +82,10 @@ public class ChannelHealthCheckService
         }
 
         // Check cache
-        if (_healthCache.TryGetValue(channelUrl, out var cached))
+        if (!forceRefresh && _healthCache.TryGetValue(channelUrl, out var cached))
         {
             var age = DateTimeOffset.UtcNow - cached.Item2;
-            if (age.TotalMinutes < CACHE_TTL_MINUTES)
+            if (age.TotalMinutes < CACHETTLMINUTES)
             {
                 PluginLog.Info($"[HEALTH] Cache hit for {channelName}");
                 return cached.Item1;
@@ -85,14 +93,14 @@ public class ChannelHealthCheckService
         }
 
         // Direct (non-token) streams: quick HTTP check, no session resolution.
-        if (channelType == 0)
+        if (channelType is ChannelEntry.DirectType or ChannelEntry.FastType)
         {
-            var quick = await QuickHttpCheckAsync(channelName, channelUrl, ct);
+            var quick = await QuickHttpCheckAsync(channelName, channelUrl, ct).ConfigureAwait(false);
             _healthCache[channelUrl] = (quick, DateTimeOffset.UtcNow);
             return quick;
         }
 
-        var result = await PerformRealHealthCheckAsync(channelName, channelUrl, ct);
+        var result = await PerformRealHealthCheckAsync(channelName, channelUrl, channelType, ct).ConfigureAwait(false);
         _healthCache[channelUrl] = (result, DateTimeOffset.UtcNow);
         return result;
     }
@@ -121,9 +129,11 @@ public class ChannelHealthCheckService
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
 
             result.HttpStatus = (int)response.StatusCode;
-            result.BytesDownloaded = response.IsSuccessStatusCode ? MIN_BYTES_FOR_SUCCESS : 0;
+            result.BytesDownloaded = response.IsSuccessStatusCode ? MINBYTESFORSUCCESS : 0;
             if (!response.IsSuccessStatusCode)
+            {
                 result.ErrorMessage = $"HTTP {(int)response.StatusCode}";
+            }
         }
         catch (OperationCanceledException)
         {
@@ -154,7 +164,7 @@ public class ChannelHealthCheckService
         }
 
         var age = DateTimeOffset.UtcNow - cached.Item2;
-        if (age.TotalMinutes >= CACHE_TTL_MINUTES)
+        if (age.TotalMinutes >= CACHETTLMINUTES)
         {
             return false;
         }
@@ -166,9 +176,11 @@ public class ChannelHealthCheckService
     /// <summary>
     /// Checks health of all channels in a source by downloading real stream data in parallel (4 channels at a time).
     /// </summary>
+    /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
     public async Task<List<ChannelHealthStatus>> CheckSourceChannelsAsync(
         string sourceId,
         List<(string Name, string Url, int Type)> channels,
+        bool forceRefresh = false,
         CancellationToken ct = default)
     {
         PluginLog.Info($"[HEALTH] Starting health check for {channels.Count} channels from source {sourceId}");
@@ -188,7 +200,7 @@ public class ChannelHealthCheckService
                 await semaphore.WaitAsync(ct).ConfigureAwait(false);
                 try
                 {
-                    var result = await CheckChannelAsync(ch.Name, ch.Url, ch.Type, ct).ConfigureAwait(false);
+                    var result = await CheckChannelAsync(ch.Name, ch.Url, ch.Type, forceRefresh, ct).ConfigureAwait(false);
                     lock (results)
                     {
                         results.Add(result);
@@ -215,12 +227,123 @@ public class ChannelHealthCheckService
     }
 
     /// <summary>
+    /// Checks every enabled source of the given channels and applies the results to each source's
+    /// health. Channels with no live source are auto-disabled; a channel that was auto-disabled is
+    /// re-enabled as soon as any of its sources comes back online. Mutates the passed channel list.
+    /// </summary>
+    /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
+    public async Task<(int ChannelsAlive, int ChannelsDead, int SourcesChecked, int SourcesAlive)> CheckConfiguredChannelsAsync(
+        string label,
+        IReadOnlyList<ChannelEntry> channels,
+        CancellationToken ct = default)
+    {
+        var candidates = channels.Where(c => c.IsEnabled || c.AutoDisabled).ToList();
+        // Los canales AutoDisabled (caídos) se re-chequean SIN caché en cada corrida para detectar
+        // el regreso cuanto antes; los habilitados respetan la caché (30 min) para no martirizar
+        // los upstreams.
+        var toForce = new List<(string Name, string Url, int Type)>();
+        var toCache = new List<(string Name, string Url, int Type)>();
+        foreach (var ch in candidates)
+        {
+            ch.EnsureMigratedSources();
+            var target = ch.AutoDisabled ? toForce : toCache;
+            foreach (var s in ch.Sources)
+            {
+                if (s.IsEnabled && !string.IsNullOrWhiteSpace(s.Url))
+                {
+                    target.Add((ch.Name, s.Url, s.Type));
+                }
+            }
+        }
+
+        var results = new List<ChannelHealthStatus>();
+        if (toCache.Count > 0)
+        {
+            results.AddRange(await CheckSourceChannelsAsync(label, toCache, false, ct).ConfigureAwait(false));
+        }
+
+        if (toForce.Count > 0)
+        {
+            results.AddRange(await CheckSourceChannelsAsync(label, toForce, true, ct).ConfigureAwait(false));
+        }
+
+        var resultByUrl = results
+            .GroupBy(r => r.ChannelUrl, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        int channelsAlive = 0, channelsDead = 0, sourcesChecked = 0, sourcesAlive = 0;
+        foreach (var ch in candidates)
+        {
+            ch.EnsureMigratedSources();
+            var enabledSources = ch.Sources.Where(s => s.IsEnabled && !string.IsNullOrWhiteSpace(s.Url)).ToList();
+            if (enabledSources.Count == 0)
+            {
+                continue;
+            }
+
+            bool anyAlive = false;
+            string? lastError = null;
+            DateTimeOffset? lastChecked = null;
+            foreach (var s in enabledSources)
+            {
+                if (!resultByUrl.TryGetValue(s.Url, out var r))
+                {
+                    continue;
+                }
+
+                s.LastCheckedAt = r.CheckedAt;
+                s.IsAlive = r.IsAlive;
+                s.LastError = r.IsAlive ? null : r.ErrorMessage;
+                sourcesChecked++;
+                if (r.IsAlive)
+                {
+                    sourcesAlive++;
+                    anyAlive = true;
+                }
+                else
+                {
+                    lastError = string.IsNullOrWhiteSpace(lastError) ? r.ErrorMessage : lastError;
+                }
+
+                lastChecked = r.CheckedAt;
+            }
+
+            ch.LastCheckedAt = lastChecked;
+            ch.LastCheckError = lastError;
+            ch.LastCheckAlive = enabledSources.Any(s => s.IsAlive == true);
+
+            if (anyAlive)
+            {
+                channelsAlive++;
+                if (ch.AutoDisabled)
+                {
+                    ch.AutoDisabled = false;
+                    ch.IsEnabled = true;
+                }
+            }
+            else
+            {
+                channelsDead++;
+                if (ch.IsEnabled)
+                {
+                    ch.AutoDisabled = true;
+                    ch.IsEnabled = false;
+                }
+            }
+        }
+
+        PluginLog.Info($"[HEALTH] {label}: {channelsAlive} vivos / {channelsDead} caidos (fuentes: {sourcesAlive}/{sourcesChecked})");
+        return (channelsAlive, channelsDead, sourcesChecked, sourcesAlive);
+    }
+
+    /// <summary>
     /// Performs the actual health check using ffmpeg (preferred) or fallback real download.
     /// ffmpeg verifies that the stream can actually start decoding within a short window.
     /// </summary>
     private async Task<ChannelHealthStatus> PerformRealHealthCheckAsync(
         string channelName,
         string channelUrl,
+        int channelType,
         CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
@@ -235,10 +358,10 @@ public class ChannelHealthCheckService
         {
             // Resolve URL with its own timeout budget.
             using var resolveCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            resolveCts.CancelAfter(TimeSpan.FromSeconds(RESOLVE_TIMEOUT_SECONDS));
+            resolveCts.CancelAfter(TimeSpan.FromSeconds(RESOLVETIMEOUTSECONDS));
 
             // Get or create session for this channel (handles token renewal)
-            var session = await _sessionManager.GetOrCreateSessionAsync(channelUrl, resolveCts.Token).ConfigureAwait(false);
+            var session = await _sessionManager.GetOrCreateSessionAsync(channelUrl, channelType, resolveCts.Token).ConfigureAwait(false);
             if (session?.LastResolved is null)
             {
                 result.HttpStatus = 0;
@@ -251,8 +374,8 @@ public class ChannelHealthCheckService
 
             // Probe with ffmpeg under a dedicated timeout budget.
             using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            probeCts.CancelAfter(TimeSpan.FromSeconds(FFMPEG_TIMEOUT_SECONDS + 3));
-            var (ffmpegResult, ffmpegTimedOut) = await TryCheckWithFfmpegAsync(channelName, resolvedUrl, probeCts.Token);
+            probeCts.CancelAfter(TimeSpan.FromSeconds(FFMPEGTIMEOUTSECONDS + 3));
+            var (ffmpegResult, ffmpegTimedOut) = await TryCheckWithFfmpegAsync(channelName, resolvedUrl, probeCts.Token).ConfigureAwait(false);
             if (ffmpegResult is not null)
             {
                 result.HttpStatus = ffmpegResult.HttpStatus;
@@ -265,12 +388,12 @@ public class ChannelHealthCheckService
 
             // Fallback gets a fresh timeout budget so ffmpeg probe time doesn't starve it.
             using var fallbackCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            fallbackCts.CancelAfter(TimeSpan.FromSeconds(REQUEST_TIMEOUT_SECONDS));
+            fallbackCts.CancelAfter(TimeSpan.FromSeconds(REQUESTTIMEOUTSECONDS));
 
             // When ffmpeg timed out, the token is now ~18s old and likely expired.
             // Pre-renew here so the fallback starts with a guaranteed fresh token,
             // eliminating the 401-renew-401 double-round-trip in CheckHlsStreamAsync.
-            if (ffmpegTimedOut)
+            if (ffmpegTimedOut && ChannelEntry.IsTokenizedType(channelType))
             {
                 PluginLog.Info($"[HEALTH] Pre-renewing session after ffmpeg timeout for {channelName}");
                 await _sessionManager.RenewSessionAsync(session, fallbackCts.Token).ConfigureAwait(false);
@@ -282,11 +405,11 @@ public class ChannelHealthCheckService
             // Fallback: download real data if ffmpeg is unavailable or failed.
             if (session.LastResolved?.IsHls == true)
             {
-                result = await CheckHlsStreamAsync(channelName, session, fallbackCts.Token);
+                result = await CheckHlsStreamAsync(channelName, session, fallbackCts.Token).ConfigureAwait(false);
             }
             else
             {
-                result = await CheckDirectStreamAsync(channelName, fallbackUrl, fallbackCts.Token);
+                result = await CheckDirectStreamAsync(channelName, fallbackUrl, fallbackCts.Token).ConfigureAwait(false);
             }
 
             result.ChannelName = channelName;
@@ -307,7 +430,7 @@ public class ChannelHealthCheckService
         catch (OperationCanceledException)
         {
             result.HttpStatus = 0;
-            result.ErrorMessage = $"Timeout ({REQUEST_TIMEOUT_SECONDS}s)";
+            result.ErrorMessage = $"Timeout ({REQUESTTIMEOUTSECONDS}s)";
         }
         catch (HttpRequestException ex)
         {
@@ -338,7 +461,7 @@ public class ChannelHealthCheckService
     /// </summary>
     private async Task<(ChannelHealthStatus? Status, bool TimedOut)> TryCheckWithFfmpegAsync(string channelName, string streamUrl, CancellationToken ct)
     {
-        var ffmpeg = await GetFfmpegPathAsync(ct);
+        var ffmpeg = await GetFfmpegPathAsync(ct).ConfigureAwait(false);
         if (string.IsNullOrEmpty(ffmpeg))
         {
             return (null, false); // ffmpeg not available
@@ -365,7 +488,7 @@ public class ChannelHealthCheckService
 
             // Wait for ffmpeg to finish (with timeout)
             var completed = await Task.Run(
-                () => process.WaitForExit(FFMPEG_TIMEOUT_SECONDS * 1000),
+                () => process.WaitForExit(FFMPEGTIMEOUTSECONDS * 1000),
                 ct).ConfigureAwait(false);
 
             sw.Stop();
@@ -387,7 +510,7 @@ public class ChannelHealthCheckService
             return (new ChannelHealthStatus
             {
                 HttpStatus = 200,
-                BytesDownloaded = MIN_BYTES_FOR_SUCCESS,
+                BytesDownloaded = MINBYTESFORSUCCESS,
                 DurationMs = (int)sw.ElapsedMilliseconds
             }, false);
         }
@@ -403,7 +526,7 @@ public class ChannelHealthCheckService
     /// </summary>
     private static string BuildFfmpegArgs(string streamUrl)
     {
-        return $@"-v error -hide_banner -nostats -nostdin -timeout {FFMPEG_NETWORK_TIMEOUT_MICROSECONDS} -i ""{streamUrl}"" -t {FFMPEG_PROBE_DURATION_SECONDS} -f null -";
+        return $@"-v error -hide_banner -nostats -nostdin -timeout {FFMPEGNETWORKTIMEOUTMICROSECONDS} -i ""{streamUrl}"" -t {FFMPEGPROBEDURATIONSECONDS} -f null -";
     }
 
     /// <summary>
@@ -555,7 +678,8 @@ public class ChannelHealthCheckService
                 using var playlistResp = await client.GetAsync(playlistUrl, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
                 if (!playlistResp.IsSuccessStatusCode)
                 {
-                    if (attempt == 1 && (int)playlistResp.StatusCode is 401 or 403)
+                    if (ChannelEntry.IsTokenizedType(session.ChannelType)
+                        && attempt == 1 && (int)playlistResp.StatusCode is 401 or 403)
                     {
                         PluginLog.Warn($"[HEALTH] Playlist auth {(int)playlistResp.StatusCode} channel={channelName}; renewing session and retrying once");
                         await _sessionManager.RenewSessionAsync(session, ct).ConfigureAwait(false);
@@ -579,7 +703,8 @@ public class ChannelHealthCheckService
                         using var variantResp = await client.GetAsync(variantUrl, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
                         if (!variantResp.IsSuccessStatusCode)
                         {
-                            if (attempt == 1 && (int)variantResp.StatusCode is 401 or 403)
+                            if (ChannelEntry.IsTokenizedType(session.ChannelType)
+                                && attempt == 1 && (int)variantResp.StatusCode is 401 or 403)
                             {
                                 PluginLog.Warn($"[HEALTH] Variant auth {(int)variantResp.StatusCode} channel={channelName}; renewing session and retrying once");
                                 await _sessionManager.RenewSessionAsync(session, ct).ConfigureAwait(false);
@@ -613,7 +738,7 @@ public class ChannelHealthCheckService
                 if (isPostRenewal)
                 {
                     result.HttpStatus = 200;
-                    result.BytesDownloaded = MIN_BYTES_FOR_SUCCESS;
+                    result.BytesDownloaded = MINBYTESFORSUCCESS;
                     result.StreamType = "hls";
                     PluginLog.Info($"[HEALTH] HLS playlist OK channel={channelName}: {segmentUrls.Count} segments found (post-renewal lightweight check)");
                     return result;
@@ -633,7 +758,8 @@ public class ChannelHealthCheckService
                         lastSegmentStatus = (int)segmentResp.StatusCode;
 
                         // Tokenized streams may require one forced renewal between checks.
-                        if (attempt == 1 && lastSegmentStatus is 401 or 403)
+                        if (ChannelEntry.IsTokenizedType(session.ChannelType)
+                            && attempt == 1 && lastSegmentStatus is 401 or 403)
                         {
                             PluginLog.Warn($"[HEALTH] Segment auth {lastSegmentStatus} channel={channelName}; renewing session and retrying once");
                             mustRenew = true;
@@ -653,10 +779,10 @@ public class ChannelHealthCheckService
                     using var stream = await segmentResp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
                     var buffer = new byte[64 * 1024]; // 64 KB chunks
                     int read;
-                    while ((read = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+                    while ((read = await stream.ReadAsync(buffer.AsMemory(), ct).ConfigureAwait(false)) > 0)
                     {
                         segmentBytes += read;
-                        if (segmentBytes >= MAX_BYTES_TO_DOWNLOAD)
+                        if (segmentBytes >= MAXBYTESTODOWNLOAD)
                         {
                             break;
                         }
@@ -783,15 +909,15 @@ public class ChannelHealthCheckService
         }
 
         var lower = codecs.ToLowerInvariant();
-        if (lower.Contains("hvc1") || lower.Contains("hev1") ||
-            lower.Contains("dvh1") || lower.Contains("dvhe") ||
-            lower.Contains("av01") || lower.Contains("vp09"))
+        if (lower.Contains("hvc1", StringComparison.Ordinal) || lower.Contains("hev1", StringComparison.Ordinal) ||
+            lower.Contains("dvh1", StringComparison.Ordinal) || lower.Contains("dvhe", StringComparison.Ordinal) ||
+            lower.Contains("av01", StringComparison.Ordinal) || lower.Contains("vp09", StringComparison.Ordinal))
         {
             return 3;
         }
 
-        var isAvc = lower.Contains("avc1") || lower.Contains("avc2");
-        if (isAvc && lower.Contains("mp4a"))
+        var isAvc = lower.Contains("avc1", StringComparison.Ordinal) || lower.Contains("avc2", StringComparison.Ordinal);
+        if (isAvc && lower.Contains("mp4a", StringComparison.Ordinal))
         {
             return 0;
         }
@@ -825,7 +951,7 @@ public class ChannelHealthCheckService
 
     private static string BuildBaseUrl(string url)
     {
-        var q = url.IndexOf('?');
+        var q = url.IndexOf('?', StringComparison.Ordinal);
         var path = q >= 0 ? url[..q] : url;
         var last = path.LastIndexOf('/');
         return last > 8 ? path[..(last + 1)] : path;
@@ -857,10 +983,10 @@ public class ChannelHealthCheckService
             using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
             var buffer = new byte[128 * 1024]; // 128 KB chunks
             int read;
-            while ((read = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+            while ((read = await stream.ReadAsync(buffer.AsMemory(), ct).ConfigureAwait(false)) > 0)
             {
                 bytesDownloaded += read;
-                if (bytesDownloaded >= MAX_BYTES_TO_DOWNLOAD)
+                if (bytesDownloaded >= MAXBYTESTODOWNLOAD)
                 {
                     break;
                 }
@@ -889,10 +1015,10 @@ public class ChannelHealthCheckService
     {
         var segments = new List<string>(maxCount);
 
-        foreach (var line in playlistContent.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None))
+        foreach (var line in playlistContent.Split(NewLineSeparators, StringSplitOptions.None))
         {
             var trimmed = line.Trim();
-            if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#"))
+            if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith('#'))
             {
                 continue;
             }
@@ -902,7 +1028,7 @@ public class ChannelHealthCheckService
             if (!segmentUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             {
                 // Relative URL — resolve against base
-                if (!baseUrl.EndsWith("/"))
+                if (!baseUrl.EndsWith('/'))
                 {
                     baseUrl += "/";
                 }
@@ -932,5 +1058,6 @@ public class ChannelHealthCheckService
     /// <summary>
     /// Returns count of cached entries (for diagnostics).
     /// </summary>
+    /// <returns></returns>
     public int GetCacheSize() => _healthCache.Count;
 }

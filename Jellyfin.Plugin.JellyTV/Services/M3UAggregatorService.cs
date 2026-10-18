@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
@@ -13,11 +14,8 @@ namespace Jellyfin.Plugin.JellyTV.Services;
 /// Fetches all configured M3U sources and returns a combined, rewritten playlist
 /// where every channel URL goes through /JellyTV/stream so token renewal works.
 /// </summary>
-public class M3uAggregatorService
+public sealed class M3uAggregatorService : IDisposable
 {
-    // Hardcoded constant (not configurable to avoid interference with token renewal logic)
-    private const int REQUEST_TIMEOUT_SECONDS = 30;
-
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<M3uAggregatorService> _logger;
     private readonly SemaphoreSlim _buildLock = new(1, 1);
@@ -31,12 +29,19 @@ public class M3uAggregatorService
         _logger = logger;
     }
 
+    public void Dispose()
+    {
+        _buildLock.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
     /// <summary>
     /// Builds a combined M3U playlist from all enabled sources.
     /// Each channel URL is rewritten to /JellyTV/stream.m3u8?url=&lt;base64&gt;
     /// so the proxy handles token renewal transparently.
     /// </summary>
-    public async Task<string> BuildCombinedM3uAsync(string proxyBaseUrl, CancellationToken ct = default, bool forceRefresh = false)
+    /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
+    public async Task<string> BuildCombinedM3uAsync(string proxyBaseUrl, bool forceRefresh = false, CancellationToken ct = default)
     {
         var now = DateTimeOffset.UtcNow;
         if (!forceRefresh && _cachedAt != DateTimeOffset.MinValue && (now - _cachedAt) < CacheTtl)
@@ -53,38 +58,42 @@ public class M3uAggregatorService
                 return _cachedM3u;
             }
 
-        var config = Plugin.Instance?.Configuration;
-        if (config is null)
-        {
-            _cachedM3u = "#EXTM3U\n";
+            var config = Plugin.Instance?.Configuration;
+            if (config is null)
+            {
+                _cachedM3u = "#EXTM3U\n";
+                _cachedAt = DateTimeOffset.UtcNow;
+                return _cachedM3u;
+            }
+
+            var channels = config.Channels?.FindAll(c => c.IsEnabled && !string.IsNullOrWhiteSpace(c.Url)) ?? new();
+            PluginLog.Info($"[M3U] Building combined M3U from {channels.Count} channel(s)");
+
+            var sb = new StringBuilder();
+            sb.AppendLine("#EXTM3U");
+
+            foreach (var ch in channels)
+            {
+                var encodedUrl = Convert.ToBase64String(Encoding.UTF8.GetBytes(ch.Url))
+                    .Replace('+', '-').Replace('/', '_').TrimEnd('=');
+
+                if (!string.IsNullOrWhiteSpace(ch.TvgId))
+                {
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"#EXTINF:-1 tvg-id=\"{ch.TvgId}\" tvg-name=\"{ch.TvgName ?? ch.Name}\" tvg-logo=\"{ch.LogoUrl ?? string.Empty}\" group-title=\"{ch.Category ?? string.Empty}\",{ch.Name}");
+                }
+                else
+                {
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"#EXTINF:-1 tvg-name=\"{ch.TvgName ?? ch.Name}\" tvg-logo=\"{ch.LogoUrl ?? string.Empty}\" group-title=\"{ch.Category ?? string.Empty}\",{ch.Name}");
+                }
+
+                sb.AppendLine(CultureInfo.InvariantCulture, $"{proxyBaseUrl}/stream.m3u8?url={encodedUrl}");
+            }
+
+            _cachedM3u = sb.ToString();
             _cachedAt = DateTimeOffset.UtcNow;
+
+            PluginLog.Info($"[M3U] Combined M3U ready: {channels.Count} total channels");
             return _cachedM3u;
-        }
-
-        var channels = config.Channels?.FindAll(c => c.IsEnabled && !string.IsNullOrWhiteSpace(c.Url)) ?? new();
-        PluginLog.Info($"[M3U] Building combined M3U from {channels.Count} channel(s)");
-
-        var sb = new StringBuilder();
-        sb.AppendLine("#EXTM3U");
-
-        foreach (var ch in channels)
-        {
-            var encodedUrl = Convert.ToBase64String(Encoding.UTF8.GetBytes(ch.Url))
-                .Replace('+', '-').Replace('/', '_').TrimEnd('=');
-
-            if (!string.IsNullOrWhiteSpace(ch.TvgId))
-                sb.AppendLine($"#EXTINF:-1 tvg-id=\"{ch.TvgId}\" tvg-name=\"{ch.TvgName ?? ch.Name}\" tvg-logo=\"{ch.LogoUrl ?? ""}\" group-title=\"{ch.Category ?? ""}\",{ch.Name}");
-            else
-                sb.AppendLine($"#EXTINF:-1 tvg-name=\"{ch.TvgName ?? ch.Name}\" tvg-logo=\"{ch.LogoUrl ?? ""}\" group-title=\"{ch.Category ?? ""}\",{ch.Name}");
-
-            sb.AppendLine($"{proxyBaseUrl}/stream.m3u8?url={encodedUrl}");
-        }
-
-        _cachedM3u = sb.ToString();
-        _cachedAt = DateTimeOffset.UtcNow;
-
-        PluginLog.Info($"[M3U] Combined M3U ready: {channels.Count} total channels");
-        return _cachedM3u;
         }
         finally
         {
@@ -96,7 +105,7 @@ public class M3uAggregatorService
     /// Parses an M3U playlist and rewrites every stream URL to go through the proxy.
     /// Preserves all #EXTINF metadata lines unchanged.
     /// </summary>
-    private (string content, int count) ParseAndRewrite(string m3u, IptvSource source, string proxyBaseUrl)
+    private (string Content, int Count) ParseAndRewrite(string m3u, IptvSource source, string proxyBaseUrl)
     {
         var sb = new StringBuilder();
         var lines = m3u.Split('\n');
@@ -108,7 +117,9 @@ public class M3uAggregatorService
             var line = rawLine.TrimEnd('\r');
 
             if (line.StartsWith("#EXTM3U", StringComparison.OrdinalIgnoreCase))
+            {
                 continue; // skip the header; we already wrote one
+            }
 
             if (line.StartsWith("#EXTINF", StringComparison.OrdinalIgnoreCase))
             {
@@ -116,7 +127,7 @@ public class M3uAggregatorService
                 continue;
             }
 
-            if (line.StartsWith("#", StringComparison.Ordinal) || string.IsNullOrWhiteSpace(line))
+            if (line.StartsWith('#') || string.IsNullOrWhiteSpace(line))
             {
                 // Directives and blank lines: emit as-is (but buffer after EXTINF)
                 if (pendingExtInf is not null)
@@ -124,8 +135,12 @@ public class M3uAggregatorService
                     sb.AppendLine(pendingExtInf);
                     pendingExtInf = null;
                 }
+
                 if (!string.IsNullOrWhiteSpace(line))
+                {
                     sb.AppendLine(line);
+                }
+
                 continue;
             }
 

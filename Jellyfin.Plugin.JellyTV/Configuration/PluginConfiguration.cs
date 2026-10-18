@@ -10,51 +10,90 @@ public class PluginConfiguration : BasePluginConfiguration
     // ── HTTP / Token settings ─────────────────────────────────────────────
     // MaxRedirects and RequestTimeoutSeconds are now hardcoded constants to prevent
     // interference with token renewal logic. See RedirectResolverService.
-    public string UserAgent { get; set; } = "Mozilla/5.0 (compatible; JellyTV/1.0)";
+    // El default es un User-Agent de navegador (fuente única: Plugin.DefaultUserAgent).
+    // Se edita en la UI; la lógica de fetch/entrega nunca lo hardcodea.
+    public string UserAgent { get; set; } = Plugin.DefaultUserAgent;
+
+    /// <summary>
+    /// Gets or sets URL base pública con la que la instancia de Jellyfin se alcanza a sí misma para
+    /// construir los Path de streaming (p. ej. "https://tv.midominio.com"). Plugin público: cada
+    /// instancia registra la suya; NUNCA se hardcodea un dominio concreto. Vacío = auto (host de la
+    /// última petición al plugin y, como último recurso, localhost con aviso en log).
+    /// </summary>
+    public string PublicStreamingBaseUrl { get; set; } = string.Empty;
+
     public bool VerboseLogging { get; set; } = false;
+
     public string PreferredAudioLanguages { get; set; } = "es,spa,es-419";
+
     public string PreferredSubtitleLanguages { get; set; } = "es,spa";
 
     // ── Channel management ────────────────────────────────────────────────
-    /// <summary>Individual channels managed directly (no M3U sources).</summary>
+
+    /// <summary>Gets or sets individual channels managed directly (no M3U sources).</summary>
     public List<ChannelEntry> Channels { get; set; } = new();
 
     // ── Proxy pool ────────────────────────────────────────────────────────
-    /// <summary>HTTPS proxies used for chain resolution (not segment downloads).</summary>
+
+    /// <summary>Gets or sets hTTPS proxies used for chain resolution (not segment downloads).</summary>
     public List<ProxyEntry> Proxies { get; set; } = new();
 
     /// <summary>
-    /// When true the plugin auto-registers a single M3U tuner in Jellyfin
-    /// pointing to /JellyTV/m3u so you don't have to do it manually.
+    /// Gets or sets a value indicating whether keeps the optional diagnostic M3U endpoint available. Channels are exposed
+    /// through the JellyTV provider and do not require an external M3U tuner.
     /// </summary>
     public bool AutoRegisterTuner { get; set; } = true;
 
     // ── Scheduled tasks ───────────────────────────────────────────────────
-    /// <summary>How often (in hours) the source sync task re-fetches all M3U sources.</summary>
+
+    /// <summary>
+    /// Gets or sets how often (in hours) the EPG sync task re-fetches the XMLTV sources. Contenido
+    /// pesado: por defecto cada 24 h (frecuencia distinta del health/M3U, que es en minutos).
+    /// </summary>
     public int SourceSyncIntervalHours { get; set; } = 24;
-    /// <summary>How often (in hours) the channel health check task validates all channels.</summary>
+
+    /// <summary>
+    /// Gets or sets how often (in minutes) the maintenance task validates channel/source health.
+    /// "Constant" cadence: los canales caídos se re-chequean en cada corrida para re-habilitarlos
+    /// en cuanto regresan; los sanos respetan la caché interna del health service.
+    /// </summary>
+    public int HealthCheckIntervalMinutes { get; set; } = 30;
+
+    /// <summary>
+    /// Gets or sets how often (in hours) the channel health check task validates all channels.
+    /// Obsoleto: se conserva por compatibilidad XML; la cadencia real es HealthCheckIntervalMinutes.
+    /// </summary>
     public int ChannelHealthCheckIntervalHours { get; set; } = 24;
 
-    // ── Worker integration ────────────────────────────────────────────────
-    /// <summary>Base URL of the JellyTV Cloudflare Worker (e.g. https://jellytv.hmovies.tv).</summary>
-    public string WorkerBaseUrl { get; set; } = string.Empty;
-    /// <summary>API key sent as x-api-key to authenticate health reports to the Worker.</summary>
-    public string WorkerApiKey { get; set; } = string.Empty;
+    /// <summary>
+    /// Gets or sets a value indicating whether la tarea de mantenimiento dispara el "Refresh Guide"
+    /// de Jellyfin cuando un health check deshabilita/rehabilita canales o se regenera la EPG, para
+    /// que el tuner M3U refleje el cambio lo antes posible sin tarea externa.
+    /// </summary>
+    public bool AutoRefreshGuideOnChange { get; set; } = true;
 
     // ── TMDB enrichment ────────────────────────────────────────────────────
-    /// <summary>TMDB API v4 Bearer token used by the Plugin to enrich EPG titles.</summary>
+
+    /// <summary>Gets or sets tMDB API v4 Bearer token used by the Plugin to enrich EPG titles.</summary>
     public string TmdbApiKey { get; set; } = string.Empty;
 
-    /// <summary>Maximum parallel workers for TMDB enrichment pipeline.</summary>
+    /// <summary>Gets or sets maximum parallel workers for TMDB enrichment pipeline.</summary>
     public int TmdbMaxConcurrency { get; set; } = 6;
 
-    /// <summary>Minutes to suppress retries for titles with no confident TMDB match.</summary>
+    /// <summary>Gets or sets minutes to suppress retries for titles with no confident TMDB match.</summary>
     public int TmdbNoMatchTtlMinutes { get; set; } = 180;
 
     // ── EPG / XMLTV filter ─────────────────────────────────────────────────
+
     /// <summary>
-    /// XMLTV sources that the Plugin will download, filter to matching tvg-ids,
-    /// and push to the Worker. Keeps Worker CPU/storage usage minimal.
+    /// Gets or sets xMLTV sources that the Plugin downloads, filters to the channel tvg-ids
+    /// and merges locally into a single guide file served by the Plugin itself.
     /// </summary>
     public List<EpgSource> EpgSources { get; set; } = new();
+
+    /// <summary>
+    /// Gets or sets zona horaria IANA en la que están escritas las horas de los XMLTV
+    /// (p. ej. "America/Mexico_City"). Vacío/"UTC" = respetar el offset declarado.
+    /// </summary>
+    public string EpgTimezone { get; set; } = string.Empty;
 }

@@ -24,17 +24,20 @@ public class HlsRewriterService
     private readonly ILogger<HlsRewriterService> _logger;
 
     /// <summary>
-    /// Backoff after a rejected token renewal. The token generator (e.g. alfa) applies
+    /// Backoff after a rejected token renewal. Some token generators apply
     /// a strict per-IP rate limit; hammering it makes playback stall for the whole window.
     /// </summary>
     private static readonly TimeSpan TokenRenewalCooldown = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// Intervalo para renovar proactivamente el token antes de que expire. El proveedor
-    /// emite tokens de corta vida (~2 min observado); renovar cada minuto mantiene uno
-    /// fresco y evita el corte cuando el token muere (la app oficial re-consulta la URL).
+    /// Intervalo para renovar proactivamente el token antes de que expire. Para tokens
+    /// EFIMEROS (SessionToken=false, p. ej. alfa.7057460 -> tuenisix) la vida es de ~20s:
+    /// renovar cada 60s deja que expire y obliga a la via reactiva (403 + cooldown 30s),
+    /// que es la que causa los tirones al iniciar. Con ~9s cada playlist refrescado lleva
+    /// un token fresco (&lt;15s de edad) y nunca llega al 403. ShouldProactivelyRenew solo
+    /// aplica a efimeros (!SessionToken); los tokens largos no pasan por aqui.
     /// </summary>
-    private static readonly TimeSpan ProactiveRenewalInterval = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan ProactiveRenewalInterval = TimeSpan.FromSeconds(9);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="HlsRewriterService"/> class.
@@ -56,6 +59,8 @@ public class HlsRewriterService
     /// (verificado: el segmento mas viejo devuelve 403 unos segundos despues de publicarse).
     /// Un TTL cercano a la ventana entera hace que FFmpeg intente segmentos ya expirados y
     /// congele entre cambios de ventana. Servir siempre una ventana fresca (~1/3 de la ventana).
+    /// Cap superior bajo (2.5 s): con segmentos de 6-7 s reduce los micro-cortes de frontera
+    /// porque FFmpeg descubre antes el segmento nuevo.
     /// </summary>
     private static TimeSpan GetPlaylistTtl(double? windowSeconds)
     {
@@ -95,7 +100,7 @@ public class HlsRewriterService
         }
 
         // Slow path: cache expired. Serialize with a semaphore so ffmpeg + browser
-        // don't both fetch from alfa simultaneously, doubling rate-limit pressure.
+        // don't both fetch from the token source simultaneously, doubling rate-limit pressure.
         await session.PlaylistFetchLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -113,16 +118,15 @@ public class HlsRewriterService
                 }
             }
 
-            // ponytail: for tokenized streams, use FinalUrl (tuenisix?token=XXX)
-            // directly — tuenisix sirve playlist y segmentos sin rate-limit mientras
-            // el token es valido. La renovacion (contra alfa) solo se dispara por
+            // ponytail: for tokenized streams, use FinalUrl directly while the
+            // token is valid. Renewal only starts after a real authentication failure
             // 403 real o proactivamente antes de que el token expire.
-            // Proxy rotation is disabled — alfa blocks proxy IPs anyway.
+            // Proxy rotation is disabled for the final playlist request.
             resolved = session.LastResolved
                 ?? throw new InvalidOperationException("Session has no resolved stream.");
             var isTokenized = !string.IsNullOrWhiteSpace(resolved.TokenValue);
 
-            // Renovacion proactiva: mantener un token fresco (< 60s) evita el corte
+            // Renovacion proactiva: mantener un token fresco (< ~9s de edad) evita el corte
             // cuando el token muere (el proveedor lo rechaza con 403 en el peor momento).
             if (isTokenized && ShouldProactivelyRenew(session))
             {
@@ -147,11 +151,11 @@ public class HlsRewriterService
             }
             catch (HttpRequestException ex) when (IsAuthenticationFailure(ex) && isTokenized)
             {
-                // Solo los tokens efimeros (type 2) se renuevan. Directo/FAST/permanente:
+                // Solo los canales Tokenizado renuevan. Directo/FAST/Proxy:
                 // un 403 es terminal para el token actual, no se re-resuelve.
-                if (session.ChannelType != 2)
+                if (session.ChannelType != ChannelEntry.TokenizedType)
                 {
-                    PluginLog.Warn($"[HLS] Auth failure on non-ephemeral channel (type={session.ChannelType}); not renewing.");
+                    PluginLog.Warn($"[HLS] Auth failure on non-tokenized channel (type={session.ChannelType}); not renewing.");
                     throw;
                 }
 
@@ -173,14 +177,14 @@ public class HlsRewriterService
                 session.LastTokenRenewalAttemptAt = DateTimeOffset.UtcNow;
                 PluginLog.Warn($"[HLS] Final token rejected; renewing via {session.TokenRenewalUrl}");
 
-                // Intento 1: renovar contra el hop generador (alfa), como la resolucion inicial.
+                // Intento 1: renew against the token-generating redirect hop.
                 var renewed = !string.IsNullOrWhiteSpace(session.TokenRenewalUrl)
                     ? await TryRenewPlaylistViaGeneratorAsync(session, cancellationToken).ConfigureAwait(false)
                     : null;
                 if (renewed is null)
                 {
-                    // Intento 2: re-resolver desde el origen (api -> alfa -> tuenisix), el
-                    // mismo camino con el que arranco la sesion y que la app oficial usa.
+                    // Intento 2: re-resolve from the original source using the same
+                    // redirect chain that created the session.
                     if (!string.IsNullOrWhiteSpace(session.UpstreamUrl)
                         && await TryReResolveOriginAsync(session, cancellationToken).ConfigureAwait(false))
                     {
@@ -199,13 +203,41 @@ public class HlsRewriterService
                     (playlistContent, finalPlaylistUrl) = renewed.Value;
                 }
             }
+
             resolved = session.LastResolved ?? resolved;
+
+            // Nunca servir HTML/JS como playlist: si el upstream devuelve algo que no es HLS
+            // (token muerto que responde con HTML/login), descartarlo y usar la última buena.
+            if (!LooksLikeHlsPlaylist(playlistContent))
+            {
+                PluginLog.Warn($"[HLS] Upstream returned non-HLS content from {finalPlaylistUrl}; serving stale cache.");
+                throw new InvalidOperationException("Upstream returned non-HLS content.");
+            }
+
+            // Los masters multicapa (FAST) hacen lento el arranque: ffmpeg/Jellyfin eligen la
+            // variante top (1080p) y procesan el master completo. Colapsar a UNA variante ligera
+            // (~720p) reduce el trabajo de ffmpeg y acelera la primera imagen.
+            if (playlistContent.Contains("#EXT-X-STREAM-INF", StringComparison.Ordinal))
+            {
+                var mediaUrl = SelectBestVariantForRelay(playlistContent, finalPlaylistUrl);
+                if (!string.IsNullOrWhiteSpace(mediaUrl))
+                {
+                    var mediaFetch = await FetchPlaylistWithProxyRotationAsync(mediaUrl, isTokenized, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (LooksLikeHlsPlaylist(mediaFetch.Content))
+                    {
+                        playlistContent = mediaFetch.Content;
+                        finalPlaylistUrl = mediaFetch.FinalUrl;
+                    }
+                }
+            }
+
             UpdateResolvedFinalUrl(resolved, finalPlaylistUrl);
             PluginLog.Info($"[HLS] Fetched {playlistContent.Length} bytes OK from {finalPlaylistUrl}");
 
             var (windowSeconds, targetDurationSeconds) = AnalyzeMediaPlaylistWindow(playlistContent);
             session.LastPlaylistSegmentUrls = ExtractMediaSegmentUrls(playlistContent, resolved).ToArray();
-            var segmentCount = session.LastPlaylistSegmentUrls.Length;
+            var segmentCount = session.LastPlaylistSegmentUrls.Count;
             PluginLog.Info($"[HLS] Window={windowSeconds:F1}s TargetDur={targetDurationSeconds:F1}s Segments={segmentCount} First80={playlistContent[..Math.Min(80, playlistContent.Length)]}");
             session.LastPlaylistWindowSeconds = windowSeconds;
             session.LastPlaylistTargetDurationSeconds = targetDurationSeconds;
@@ -223,7 +255,10 @@ public class HlsRewriterService
             // after this short cooldown may obtain a fresh token through redirects.
             var age = DateTimeOffset.UtcNow - (session.LastPlaylistFetchedAt ?? DateTimeOffset.MinValue);
             if (IsAuthenticationFailure(ex))
+            {
                 session.LastPlaylistFetchedAt = DateTimeOffset.UtcNow;
+            }
+
             PluginLog.Warn($"[HLS] Fetch failed, serving stale cache (age={age.TotalSeconds:F0}s): {ex.Message}");
             return session.LastPlaylistContent;
         }
@@ -237,33 +272,150 @@ public class HlsRewriterService
         ex is HttpRequestException { StatusCode: System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden };
 
     /// <summary>
+    /// Para masters multicapa elige la mejor variante &lt;= ~2.8 Mbps (~720p) para arranque rápido;
+    /// si todas superan ese tope, la de mayor bitrate. Devuelve vacío si no hay variantes.
+    /// </summary>
+    private static string SelectBestVariantForRelay(string playlist, string playlistUrl)
+    {
+        const long targetBandwidth = 2_800_000;
+        string? bestBelow = null;
+        long bestBelowBandwidth = -1;
+        string? bestAny = null;
+        long bestAnyBandwidth = -1;
+        string? pendingHeader = null;
+
+        foreach (var raw in playlist.Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.StartsWith("#EXT-X-STREAM-INF", StringComparison.OrdinalIgnoreCase))
+            {
+                pendingHeader = line;
+                continue;
+            }
+
+            if (pendingHeader is not null && line.Length > 0 && line[0] != '#')
+            {
+                var bandwidth = TryParseBandwidthValue(pendingHeader);
+                if (bandwidth > bestAnyBandwidth)
+                {
+                    bestAnyBandwidth = bandwidth;
+                    bestAny = line;
+                }
+
+                if (bandwidth <= targetBandwidth && bandwidth > bestBelowBandwidth)
+                {
+                    bestBelowBandwidth = bandwidth;
+                    bestBelow = line;
+                }
+
+                pendingHeader = null;
+            }
+        }
+
+        var chosen = bestBelow ?? bestAny;
+        if (chosen is null)
+        {
+            return string.Empty;
+        }
+
+        if (chosen.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || chosen.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return chosen;
+        }
+
+        return new Uri(new Uri(playlistUrl), chosen).ToString();
+    }
+
+    private static long TryParseBandwidthValue(string streamInfLine)
+    {
+        const string marker = "BANDWIDTH=";
+        var idx = streamInfLine.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0)
+        {
+            return -1;
+        }
+
+        var start = idx + marker.Length;
+        var end = start;
+        while (end < streamInfLine.Length && char.IsAsciiDigit(streamInfLine[end]))
+        {
+            end++;
+        }
+
+        return end > start && long.TryParse(streamInfLine[start..end], out var bandwidth) ? bandwidth : -1;
+    }
+
+    /// <summary>
+    /// Acepta solo contenido que parezca un playlist HLS (no HTML/JS de un gateway).
+    /// </summary>
+    private static bool LooksLikeHlsPlaylist(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return false;
+        }
+
+        var head = content.Length > 512 ? content[..512] : content;
+        return head.Contains("#EXTM3U", StringComparison.OrdinalIgnoreCase)
+               || head.Contains("#EXT-X-", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Pre-fetches a fresh playlist in the background when ~80% of the current window
     /// has been consumed, so the next ffmpeg poll hits cache instead of making an upstream call.
     /// </summary>
+    /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
     public async Task TryBackgroundRefreshPlaylistAsync(
         StreamSession session,
         string servedSegmentUrl,
         string proxyBaseUrl,
         CancellationToken ct)
     {
-        if (session.IsPlaylistRefreshInProgress) return;
+        if (session.IsPlaylistRefreshInProgress)
+        {
+            return;
+        }
+
         if (session.LastPlaylistRefreshAttemptAt.HasValue
             && DateTimeOffset.UtcNow - session.LastPlaylistRefreshAttemptAt.Value < TimeSpan.FromSeconds(10))
+        {
             return;
+        }
 
         var segments = session.LastPlaylistSegmentUrls;
-        if (segments is null || segments.Length == 0) return;
+        if (segments is null || segments.Count == 0)
+        {
+            return;
+        }
 
         var window = session.LastPlaylistWindowSeconds;
-        if (!window.HasValue || window.Value <= 0) return;
+        if (!window.HasValue || window.Value <= 0)
+        {
+            return;
+        }
 
-        var idx = Array.FindIndex(segments,
-            s => string.Equals(s, servedSegmentUrl, StringComparison.OrdinalIgnoreCase));
-        if (idx < 0) return;
+        var idx = -1;
+        for (var i = 0; i < segments.Count; i++)
+        {
+            if (string.Equals(segments[i], servedSegmentUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                idx = i;
+                break;
+            }
+        }
+
+        if (idx < 0)
+        {
+            return;
+        }
 
         var targetDur = session.LastPlaylistTargetDurationSeconds ?? 2;
         var consumedFraction = (idx + 1) * targetDur / window.Value;
-        if (consumedFraction < 0.8) return;
+        if (consumedFraction < 0.8)
+        {
+            return;
+        }
 
         session.IsPlaylistRefreshInProgress = true;
         session.LastPlaylistRefreshAttemptAt = DateTimeOffset.UtcNow;
@@ -271,7 +423,10 @@ public class HlsRewriterService
         try
         {
             var resolved = session.LastResolved;
-            if (resolved is null) return;
+            if (resolved is null)
+            {
+                return;
+            }
 
             var isTokenized = !string.IsNullOrWhiteSpace(resolved.TokenValue);
             var fetchUrl = resolved.FinalUrl;
@@ -305,10 +460,19 @@ public class HlsRewriterService
         while ((line = reader.ReadLine()) is not null)
         {
             var t = line.Trim();
-            if (t.Length == 0 || t[0] == '#') continue;
-            if (t.Contains(".m3u8", StringComparison.OrdinalIgnoreCase)) continue;
+            if (t.Length == 0 || t[0] == '#')
+            {
+                continue;
+            }
+
+            if (t.Contains(".m3u8", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
             urls.Add(ResolveUri(t, resolved.BaseUrl));
         }
+
         return urls.ToArray();
     }
 
@@ -316,7 +480,7 @@ public class HlsRewriterService
     {
         // ponytail: use a fresh clean HttpClient. Shared cookies from the
         // IHttpClientFactory accumulate state across sessions and cause 403
-        // from tuenisix even when the token is still valid (confirmed via curl).
+        // from the final tokenized host even when the token is still valid.
         using var cleanHandler = new SocketsHttpHandler
         {
             AllowAutoRedirect = true,
@@ -325,39 +489,32 @@ public class HlsRewriterService
         };
         using var fallbackClient = new HttpClient(cleanHandler, disposeHandler: false);
         fallbackClient.Timeout = TimeSpan.FromSeconds(5);
-        fallbackClient.DefaultRequestHeaders.UserAgent.ParseAdd(
-            Plugin.Instance?.Configuration?.UserAgent ?? "Mozilla/5.0 (compatible; JellyTV/1.0)");
+        fallbackClient.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", Plugin.EffectiveUserAgent());
 
         const int attempt = 1;
         cancellationToken.ThrowIfCancellationRequested();
 
-            var (proxyKey, proxyClient) = isTokenized ? _proxyPool.GetNextSegmentProxy() : (null, null);
-            var client = proxyClient ?? fallbackClient;
+        var (proxyKey, proxyClient) = isTokenized ? _proxyPool.GetNextSegmentProxy() : (null, null);
+        var client = proxyClient ?? fallbackClient;
 
-            PluginLog.Info($"[HLS] Fetch attempt {attempt} from {playlistUrl} proxy={proxyKey ?? "direct"} tokenized={isTokenized}");
+        PluginLog.Info($"[HLS] Fetch attempt {attempt} from {playlistUrl} proxy={proxyKey ?? "direct"} tokenized={isTokenized}");
 
-            try
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, playlistUrl);
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, playlistUrl);
-                using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (!response.IsSuccessStatusCode)
+                if ((int)response.StatusCode is 401 or 403)
                 {
-                    if ((int)response.StatusCode is 401 or 403)
+                    // Proxy 403 is usually CDN-blocking, not a token issue.
+                    // Mark failed and retry direct on next iteration.
+                    if (proxyKey is not null)
                     {
-                        // Proxy 403 is usually CDN-blocking, not a token issue.
-                        // Mark failed and retry direct on next iteration.
-                        if (proxyKey is not null)
-                        {
-                            _proxyPool.MarkFailed(proxyKey);
-                            throw new HttpRequestException("Tokenized playlist proxy was rejected.", null, response.StatusCode);
-                        }
-
-                        throw new HttpRequestException(
-                            $"Response status code does not indicate success: {(int)response.StatusCode} ({response.StatusCode}).",
-                            null,
-                            response.StatusCode);
+                        _proxyPool.MarkFailed(proxyKey);
+                        throw new HttpRequestException("Tokenized playlist proxy was rejected.", null, response.StatusCode);
                     }
 
                     throw new HttpRequestException(
@@ -366,28 +523,34 @@ public class HlsRewriterService
                         response.StatusCode);
                 }
 
-                var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? playlistUrl;
-                return (await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false), finalUrl);
+                throw new HttpRequestException(
+                    $"Response status code does not indicate success: {(int)response.StatusCode} ({response.StatusCode}).",
+                    null,
+                    response.StatusCode);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                // Normal when Jellyfin/FFmpeg stops playback and aborts pending HTTP calls.
-                throw;
-            }
-            catch (HttpRequestException ex) when ((int?)ex.StatusCode is 401 or 403)
-            {
-                throw;
-            }
-            catch (HttpRequestException ex) when (proxyKey is not null && ex.StatusCode is null)
-            {
-                _proxyPool.MarkFailed(proxyKey);
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "[JellyTV] Playlist fetch attempt {Attempt} failed for {Url}", attempt, playlistUrl);
-                throw;
-            }
+
+            var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? playlistUrl;
+            return (await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false), finalUrl);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Normal when Jellyfin/FFmpeg stops playback and aborts pending HTTP calls.
+            throw;
+        }
+        catch (HttpRequestException ex) when ((int?)ex.StatusCode is 401 or 403)
+        {
+            throw;
+        }
+        catch (HttpRequestException ex) when (proxyKey is not null && ex.StatusCode is null)
+        {
+            _proxyPool.MarkFailed(proxyKey);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[JellyTV] Playlist fetch attempt {Attempt} failed for {Url}", attempt, playlistUrl);
+            throw;
+        }
     }
 
     private static (double? WindowSeconds, double? TargetDurationSeconds) AnalyzeMediaPlaylistWindow(string playlistText)
@@ -419,7 +582,7 @@ public class HlsRewriterService
 
             if (line.StartsWith("#EXTINF:", StringComparison.Ordinal))
             {
-                var colon = line.IndexOf(':');
+                var colon = line.IndexOf(':', StringComparison.Ordinal);
                 var comma = line.IndexOf(',', colon + 1);
                 var end = comma >= 0 ? comma : line.Length;
                 if (colon >= 0
@@ -430,6 +593,7 @@ public class HlsRewriterService
                     window += d;
                     segmentCount++;
                 }
+
                 continue;
             }
 
@@ -455,6 +619,7 @@ public class HlsRewriterService
     /// Rewrites an already downloaded HLS playlist using the same rules as the main stream path.
     /// This is used for nested playlists fetched through /JellyTV/segment.
     /// </summary>
+    /// <returns></returns>
     public string RewritePlaylistContent(string content, string sourceUrl, string sessionId, string proxyBaseUrl)
     {
         var resolved = new ResolvedStream
@@ -500,7 +665,7 @@ public class HlsRewriterService
             }
 
             // Skip comments and directives — but handle URI= attributes inline
-            if (line.StartsWith("#", StringComparison.Ordinal))
+            if (line.StartsWith('#'))
             {
                 // Rewrite URI="..." attributes inside tags like #EXT-X-KEY, #EXT-X-MAP
                 line = RewriteInlineUri(line, resolved, sessionId, proxyBaseUrl);
@@ -630,7 +795,7 @@ public class HlsRewriterService
 
     private static List<TagAttribute> ParseTagAttributes(string tagLine)
     {
-        var colonIndex = tagLine.IndexOf(':');
+        var colonIndex = tagLine.IndexOf(':', StringComparison.Ordinal);
         if (colonIndex < 0 || colonIndex + 1 >= tagLine.Length)
         {
             return [];
@@ -703,7 +868,7 @@ public class HlsRewriterService
 
     private static string BuildTagLine(string tagLine, List<TagAttribute> attributes)
     {
-        var colonIndex = tagLine.IndexOf(':');
+        var colonIndex = tagLine.IndexOf(':', StringComparison.Ordinal);
         if (colonIndex < 0)
         {
             return tagLine;
@@ -775,9 +940,13 @@ public class HlsRewriterService
     /// </summary>
     private static string BuildProxiedSegmentUrl(string upstreamUrl, string sessionId, string proxyBaseUrl)
     {
-        var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(upstreamUrl))
+        // Limpieza de beacons (FAST): el playlist puede listar el segmento como beacon/redirect
+        // (p. ej. hls-beacons-us.xumo.com/hlsstream/v1/beacon?url=<real>). Se sirve la URL real
+        // para que el cliente nunca toque la basura de redirección/telemetría.
+        var cleaned = UnwrapRedirectUrl(upstreamUrl);
+        var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(cleaned))
             .Replace('+', '-').Replace('/', '_').TrimEnd('='); // URL-safe Base64
-        var suffix = GetProxySuffix(upstreamUrl);
+        var suffix = GetProxySuffix(cleaned);
 
         return $"{proxyBaseUrl}/segment.{suffix}?sid={Uri.EscapeDataString(sessionId)}&url={encoded}";
     }
@@ -849,6 +1018,15 @@ public class HlsRewriterService
             var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? session.TokenRenewalUrl!;
             var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
+            // Guard: si el "generador" devuelve HTML (gateway que embebe el token en JS, p.ej.
+            // tvf90), NO usar esa URL como playlist ni sobrescribir FinalUrl con el gateway.
+            // Se cae al re-resolve del origen, que sí extrae el m3u8 tokenizado real.
+            if (!LooksLikeHlsPlaylist(content))
+            {
+                PluginLog.Warn($"[HLS] Generator returned non-HLS content (len={content.Length}); falling back to origin re-resolve.");
+                return null;
+            }
+
             if (session.LastResolved is { } resolved)
             {
                 UpdateResolvedFinalUrl(resolved, finalUrl);
@@ -876,9 +1054,9 @@ public class HlsRewriterService
     }
 
     /// <summary>
-    /// Renueva el token re-resolviendo la cadena completa desde el origen (api -> alfa ->
-    /// tuenisix), el mismo camino con el que arranco la sesion. Mas fiable que golpear
-    /// alfa directamente cuando este rechaza la renovacion.
+    /// Renueva el token re-resolviendo la cadena completa desde el origen, el mismo
+    /// camino con el que arranco la sesion. Mas fiable que golpear directamente el hop
+    /// generador cuando este rechaza la renovacion.
     /// </summary>
     private async Task<bool> TryReResolveOriginAsync(StreamSession session, CancellationToken ct)
     {
@@ -906,7 +1084,8 @@ public class HlsRewriterService
     }
 
     private static bool ShouldProactivelyRenew(StreamSession session) =>
-        session.ChannelType == 2
+        ChannelEntry.IsTokenizedType(session.ChannelType)
+        && !session.SessionToken
         && session.LastTokenRenewedAt is { } last
         && DateTimeOffset.UtcNow - last >= ProactiveRenewalInterval
         && session.LastResolved is { TokenValue: not null and not "" };
@@ -914,7 +1093,9 @@ public class HlsRewriterService
     private static void UpdateResolvedFinalUrl(ResolvedStream resolved, string finalUrl)
     {
         if (string.IsNullOrWhiteSpace(finalUrl) || !Uri.TryCreate(finalUrl, UriKind.Absolute, out var uri))
+        {
             return;
+        }
 
         resolved.FinalUrl = finalUrl;
         resolved.BaseUrl = BuildBaseUrl(finalUrl);
@@ -939,19 +1120,64 @@ public class HlsRewriterService
         }
     }
 
-    private record struct TagAttribute(string Key, string Value, bool WasQuoted);
-
     /// <summary>
     /// Decodes a URL-safe Base64-encoded upstream URL back to its original form.
     /// </summary>
+    /// <returns></returns>
     public static string DecodeSegmentUrl(string encoded)
     {
         // Re-pad and restore standard Base64 chars
         var base64 = encoded.Replace('-', '+').Replace('_', '/');
         var pad = base64.Length % 4;
-        if (pad == 2) base64 += "==";
-        else if (pad == 3) base64 += "=";
+        if (pad == 2)
+        {
+            base64 += "==";
+        }
+        else if (pad == 3)
+        {
+            base64 += "=";
+        }
 
         return Encoding.UTF8.GetString(Convert.FromBase64String(base64));
     }
+
+    /// <summary>
+    /// Des-envuelve URLs beacon/redirect de segmentos (p. ej. Xumo/SSAI
+    /// hls-beacons-*.xumo.com/hlsstream/v1/beacon?url=&lt;real&gt;) devolviendo la URL real del
+    /// contenido. Si no parece beacon, devuelve la URL sin cambios.
+    /// </summary>
+    /// <param name="url">URL del segmento tal como aparece en el playlist.</param>
+    /// <returns>La URL real del contenido o la original si no es un beacon.</returns>
+    public static string UnwrapRedirectUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return url;
+        }
+
+        var isBeacon = uri.Host.Contains("beacon", StringComparison.OrdinalIgnoreCase)
+            || uri.AbsolutePath.Contains("/beacon", StringComparison.OrdinalIgnoreCase)
+            || uri.AbsolutePath.Contains("/redirect", StringComparison.OrdinalIgnoreCase);
+        if (!isBeacon)
+        {
+            return url;
+        }
+
+        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        var target = query["url"];
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            return url;
+        }
+
+        if (!Uri.TryCreate(target, UriKind.Absolute, out var targetUri)
+            || (targetUri.Scheme != Uri.UriSchemeHttp && targetUri.Scheme != Uri.UriSchemeHttps))
+        {
+            return url;
+        }
+
+        return target;
+    }
+
+    private record struct TagAttribute(string Key, string Value, bool WasQuoted);
 }

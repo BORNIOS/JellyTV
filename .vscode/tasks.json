@@ -40,7 +40,7 @@
     },
     {
       "label": "copy-to-jellyfin",
-      "detail": "Stop Jellyfin and copy JellyTV.dll to the plugins folder.",
+      "detail": "Stop Jellyfin and copy the plugin DLL to the plugins folder.",
       "type": "shell",
       "windows": {
         "options": {
@@ -53,7 +53,7 @@
           }
         }
       },
-      "command": "Stop-Process -Name 'jellyfin' -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1; Copy-Item -Force -Path '${workspaceFolder}/Jellyfin.Plugin.JellyTV/bin/Release/net9.0/JellyTV.dll' -Destination '${config:jellyfinPluginDir}/JellyTV.dll'",
+      "command": "Stop-Process -Name 'jellyfin' -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1; Remove-Item -Force -Path '${config:jellyfinPluginDir}/JellyTV.dll' -ErrorAction SilentlyContinue; Copy-Item -Force -Path '${workspaceFolder}/Jellyfin.Plugin.JellyTV/bin/Release/net9.0/Jellyfin.Plugin.JellyTV.dll' -Destination '${config:jellyfinPluginDir}/Jellyfin.Plugin.JellyTV.dll'",
       "presentation": {
         "reveal": "silent"
       }

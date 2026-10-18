@@ -18,13 +18,14 @@ public sealed class ProxyPoolService
     private static readonly TimeSpan ProxyCooldown = TimeSpan.FromMinutes(5);
 
     private readonly string _userAgent;
-    private int _roundRobinIndex;
     private readonly object _indexLock = new();
 
     // One HttpClient pair per proxy key (Host:Port), built lazily and cached.
     private readonly ConcurrentDictionary<string, (HttpClient NoRedirect, HttpClient AutoRedirect)> _pool = new();
     // Timestamp of last failure per proxy key. Entries expire after ProxyCooldown.
     private readonly ConcurrentDictionary<string, DateTimeOffset> _failedAt = new();
+
+    private int _roundRobinIndex;
 
     public ProxyPoolService(string userAgent)
     {
@@ -35,6 +36,7 @@ public sealed class ProxyPoolService
     /// Returns the key and client pair for the next healthy proxy in strict round-robin order,
     /// or (null, null, null) when no proxies are available or all are in cooldown.
     /// </summary>
+    /// <returns></returns>
     public (string? ProxyKey, HttpClient? NoRedirect, HttpClient? AutoRedirect) GetNextProxy()
     {
         var config = Plugin.Instance?.Configuration;
@@ -42,7 +44,8 @@ public sealed class ProxyPoolService
 
         var available = config?.Proxies?
             .Where(p => p.IsEnabled && !string.IsNullOrWhiteSpace(p.Host))
-            .Where(p => {
+            .Where(p =>
+            {
                 var k = $"{p.Host}:{p.Port}";
                 return !_failedAt.TryGetValue(k, out var failedAt) || (now - failedAt) > ProxyCooldown;
             })
@@ -51,7 +54,10 @@ public sealed class ProxyPoolService
         if (available is null || available.Count == 0)
         {
             if (config?.Proxies?.Any(p => p.IsEnabled) is true)
+            {
                 PluginLog.Info("[PROXY] All proxies in cooldown — going direct");
+            }
+
             return (null, null, null);
         }
 
@@ -73,6 +79,7 @@ public sealed class ProxyPoolService
     /// Returns the auto-redirect client for the next healthy proxy without logging,
     /// used to rotate IPs for segment downloads. Returns null when no proxies are configured.
     /// </summary>
+    /// <returns></returns>
     public HttpClient? GetSegmentClient()
     {
         return GetNextSegmentProxy().AutoRedirect;
@@ -81,10 +88,11 @@ public sealed class ProxyPoolService
     /// <summary>
     /// Returns the next healthy proxy key and auto-redirect client, or null when none are available.
     /// </summary>
+    /// <returns></returns>
     public (string? ProxyKey, HttpClient? AutoRedirect) GetNextSegmentProxy()
     {
         var config = Plugin.Instance?.Configuration;
-        var now    = DateTimeOffset.UtcNow;
+        var now = DateTimeOffset.UtcNow;
 
         var available = config?.Proxies?
             .Where(p => p.IsEnabled && !string.IsNullOrWhiteSpace(p.Host))
@@ -95,7 +103,10 @@ public sealed class ProxyPoolService
             })
             .ToList();
 
-        if (available is null || available.Count == 0) return (null, null);
+        if (available is null || available.Count == 0)
+        {
+            return (null, null);
+        }
 
         ProxyEntry selected;
         lock (_indexLock)
@@ -104,7 +115,7 @@ public sealed class ProxyPoolService
             selected = available[_roundRobinIndex++];
         }
 
-        var key  = $"{selected.Host}:{selected.Port}";
+        var key = $"{selected.Host}:{selected.Port}";
         var pair = _pool.GetOrAdd(key, _ => BuildPair(selected));
         return (key, pair.AutoRedirect);
     }
@@ -118,17 +129,19 @@ public sealed class ProxyPoolService
         PluginLog.Warn($"[PROXY] {proxyKey} marked failed — cooldown {ProxyCooldown.TotalMinutes:F0} min");
     }
 
-    private (HttpClient, HttpClient) BuildPair(ProxyEntry entry)
+    private (HttpClient NoRedirect, HttpClient AutoRedirect) BuildPair(ProxyEntry entry)
     {
         var scheme = entry.UseHttps ? "https" : "http";
         var proxy = new WebProxy($"{scheme}://{entry.Host}:{entry.Port}", false);
         if (!string.IsNullOrEmpty(entry.Username))
+        {
             proxy.Credentials = new NetworkCredential(entry.Username, entry.Password);
+        }
 
         var cookies = new CookieContainer();
         return (
-            Build(proxy, cookies, allowRedirect: false),
-            Build(proxy, cookies, allowRedirect: true)
+            NoRedirect: Build(proxy, cookies, allowRedirect: false),
+            AutoRedirect: Build(proxy, cookies, allowRedirect: true)
         );
     }
 
@@ -147,7 +160,7 @@ public sealed class ProxyPoolService
             SslOptions = { RemoteCertificateValidationCallback = (_, _, _, _) => true }
         };
         var client = new HttpClient(handler, disposeHandler: false);
-        client.DefaultRequestHeaders.UserAgent.ParseAdd(_userAgent);
+        client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", _userAgent);
         return client;
     }
 }

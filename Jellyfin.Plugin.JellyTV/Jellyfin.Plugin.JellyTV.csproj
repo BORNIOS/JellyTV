@@ -1,15 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <AssemblyName>JellyTV</AssemblyName>
-    <RootNamespace>Jellyfin.Plugin.JellyTV</RootNamespace>
     <TargetFramework>net9.0</TargetFramework>
-    <Version>1.0.0.0</Version>
-    <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <Nullable>enable</Nullable>
+    <RootNamespace>Jellyfin.Plugin.JellyTV</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-    <Description>JellyTV plugin for Jellyfin with source management and automatic token renewal.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Nullable>enable</Nullable>
+    <AnalysisMode>AllEnabledByDefault</AnalysisMode>
+    <CodeAnalysisRuleSet>../jellyfin.ruleset</CodeAnalysisRuleSet>
     <!--
       Set this to match the Jellyfin server version you are targeting.
       Check https://www.nuget.org/packages/Jellyfin.Controller/ for available versions.
@@ -36,7 +35,15 @@
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Configuration\ConfigPage.html" />
+    <!-- Code analysis packages (build-time only, never shipped with the plugin) -->
+    <PackageReference Include="SerilogAnalyzer" Version="0.15.0" PrivateAssets="All" />
+    <PackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556" PrivateAssets="All" />
+    <PackageReference Include="SmartAnalyzers.MultithreadingAnalyzer" Version="1.1.31" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- configPage.html follows the official plugin template layout (Configuration/). -->
+    <EmbeddedResource Include="Configuration\configPage.html" />
   </ItemGroup>
 
 </Project>

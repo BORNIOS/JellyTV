@@ -5,11 +5,6 @@ using System.Text.RegularExpressions;
 
 namespace Jellyfin.Plugin.JellyTV.Services.Tmdb;
 
-public interface ITmdbNormalizationService
-{
-    string NormalizeTitle(string title);
-}
-
 public sealed class TmdbNormalizationService : ITmdbNormalizationService
 {
     private static readonly Regex MultiSpaceRe = new("\\s+", RegexOptions.Compiled);
@@ -21,9 +16,13 @@ public sealed class TmdbNormalizationService : ITmdbNormalizationService
     private static readonly Regex SubtitleSepRe = new(@"\s*[:\-\|]\s*", RegexOptions.Compiled);
     private static readonly Regex RomanWordRe = new(@"\b(?=[mdclxvi]+\b)m{0,4}(cm|cd|d?c{0,3})(xc|xl|l?x{0,3})(ix|iv|v?i{0,3})\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    /// <inheritdoc/>
     public string NormalizeTitle(string title)
     {
-        if (string.IsNullOrWhiteSpace(title)) return string.Empty;
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return string.Empty;
+        }
 
         var s = title.Trim();
         s = BracketedRe.Replace(s, " ");
@@ -58,7 +57,11 @@ public sealed class TmdbNormalizationService : ITmdbNormalizationService
     private static string RomanToArabicSafe(string input)
     {
         var value = RomanToArabic(input);
-        if (value <= 0 || value > 40) return input;
+        if (value <= 0 || value > 40)
+        {
+            return input;
+        }
+
         return value.ToString(CultureInfo.InvariantCulture);
     }
 
@@ -80,7 +83,11 @@ public sealed class TmdbNormalizationService : ITmdbNormalizationService
                 _ => 0
             };
 
-            if (cur == 0) return 0;
+            if (cur == 0)
+            {
+                return 0;
+            }
+
             total += cur > prev ? cur - (2 * prev) : cur;
             prev = cur;
         }

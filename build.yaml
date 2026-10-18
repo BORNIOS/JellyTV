@@ -3,25 +3,26 @@
 # Used by the Jellyfin Plugin Repository system.
 # See: https://jellyfin.org/docs/general/server/plugins/
 
-name: JellyTV
-guid: f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c
+name: "JellyTV"
+guid: "f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c"
 description: >
-  IPTV proxy plugin with automatic token renewal, HLS broadcast engine,
-  and configurable M3U source management.
+  Jellyfin Live TV plugin that exposes individual IPTV channels (Directo, FAST
+  and Tokenizado) with automatic token renewal, no transcoding and no M3U tuner.
 
 overview: >
-  JellyTV aggregates multiple M3U/IPTV sources, rewrites stream URLs through
-  an internal proxy, and maintains HLS playback sessions with rotating token
-  refresh — providing stable Live TV across providers that use short-lived tokens.
+  "JellyTV entrega tus canales IPTV como proveedor nativo de Live TV. Los canales
+  Directo/FAST se sirven por relay reescribiendo el HLS; los Tokenizados resuelven
+  la cadena/gateway (redirects o HTML con token embebido) y mantienen el token
+  fresco — por sesión o efímero — con renovación reactiva (401/403)."
 
-category: LiveTV
-owner: jorge.chavez@nezter.com
+category: "LiveTV"
+owner: ".:BORNIOS:."
 imageUrl: ""
 
 versions:
-  - version: 1.0.0.0
-    changelog: Simplified broadcast engine — full-chain resolve per poll, proxy rotation, no token state.
-    targetAbi: "10.10.0.0"
+  - version: "1.0.0.0"
+    changelog: "Alineación al template oficial de Jellyfin; relay de entrega para Direct/FAST; tokens por sesión y efímeros; renovación reactiva."
+    targetAbi: "10.11.0.0"
     sourceUrl: ""
     checksum: ""
     timestamp: "2026-04-21T00:00:00Z"

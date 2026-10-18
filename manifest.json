@@ -1,0 +1,21 @@
+[
+  {
+    "guid": "f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c",
+    "name": "JellyTV",
+    "description": "Jellyfin Live TV plugin that manages individual IPTV channels (direct, FAST and tokenized) with automatic token renewal, without requiring an external M3U tuner.",
+    "overview": "JellyTV expone tus canales IPTV como un proveedor nativo de Live TV: canales Directo/FAST se sirven por relay reescribiendo el HLS, y los Tokenizados resuelven la cadena/gateway (redirects o HTML con token embebido) y mantienen el token fresco (por sesión o efímero) sin transcodificación ni remuxing.",
+    "owner": ".:BORNIOS:.",
+    "category": "LiveTV",
+    "imageUrl": "",
+    "versions": [
+      {
+        "version": "1.0.0.0",
+        "changelog": "Alineación al template oficial de Jellyfin: assembly Jellyfin.Plugin.JellyTV, analizadores oficiales, relay de entrega para Direct/FAST, soporte de tokens por sesión y efímeros (gateways HTML), y renovación reactiva.",
+        "targetAbi": "10.11.0.0",
+        "sourceUrl": "",
+        "checksum": "",
+        "timestamp": "2026-09-05T00:00:00Z"
+      }
+    ]
+  }
+]

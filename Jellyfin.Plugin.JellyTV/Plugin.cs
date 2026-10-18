@@ -9,6 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.JellyTV.Configuration;
+using Jellyfin.Plugin.JellyTV.Models;
 using Jellyfin.Plugin.JellyTV.Services;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
@@ -24,29 +25,16 @@ namespace Jellyfin.Plugin.JellyTV;
 
 /// <summary>
 /// JellyTV plugin — manages individual TV channels and injects them directly
-/// into Jellyfin Live TV via <see cref="ILiveTvService"/>, bypassing the M3U tuner.
+/// into Jellyfin Live TV as a native provider without requiring an external M3U tuner.
 /// </summary>
 public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
-    public static Plugin? Instance { get; private set; }
-
-    public RedirectResolverService RedirectResolver { get; }
-    public HlsRewriterService HlsRewriter { get; }
-    public SessionManagerService SessionManager { get; }
-    public ChannelHealthCheckService ChannelHealthCheck { get; }
-    public WorkerReporterService WorkerReporter { get; }
-    public EpgFilterService EpgFilter { get; }
-    public TmdbEnrichmentService TmdbEnrichment { get; }
-
-    public IHttpClientFactory HttpClientFactory { get; }
-
-    /// <summary>Base URL of the Jellyfin server, set on first access.</summary>
-    public string? KnownBaseUrl { get; set; }
-
-    // ══ BasePlugin overrides ════════════════════════════════════════════
-    public override string Name => "JellyTV";
-    public override Guid Id => Guid.Parse("f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c");
-    public override string Description => "TV channel manager with automatic token renewal for IPTV streams.";
+    /// <summary>
+    /// User-Agent por defecto (navegador). Fuente única; sobrescribible en Configuración →
+    /// "User-Agent HTTP global". Nunca hardcodeado en la lógica de fetch/entrega.
+    /// </summary>
+    public const string DefaultUserAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
     // ══ Constructor ════════════════════════════════════════════════════
 
@@ -75,18 +63,18 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
         try
         {
-            var localFactory = new LocalHttpClientFactory(
-                httpClientFactory,
-                Configuration?.UserAgent ?? "JellyTV/1.0");
+            var localFactory = new LocalHttpClientFactory(httpClientFactory, EffectiveUserAgent());
 
-            var proxyPool = new ProxyPoolService(Configuration?.UserAgent ?? "JellyTV/1.0");
+            var proxyPool = new ProxyPoolService(EffectiveUserAgent());
             RedirectResolver = new RedirectResolverService(localFactory, loggerFactory.CreateLogger<RedirectResolverService>(), proxyPool);
-            HlsRewriter      = new HlsRewriterService(localFactory, proxyPool, RedirectResolver, loggerFactory.CreateLogger<HlsRewriterService>());
-            SessionManager   = new SessionManagerService(RedirectResolver, loggerFactory.CreateLogger<SessionManagerService>());
+            HlsRewriter = new HlsRewriterService(localFactory, proxyPool, RedirectResolver, loggerFactory.CreateLogger<HlsRewriterService>());
+            SessionManager = new SessionManagerService(RedirectResolver, loggerFactory.CreateLogger<SessionManagerService>());
             ChannelHealthCheck = new ChannelHealthCheckService(localFactory, loggerFactory.CreateLogger<ChannelHealthCheckService>(), SessionManager, applicationPaths);
-            WorkerReporter    = new WorkerReporterService(localFactory, loggerFactory.CreateLogger<WorkerReporterService>());
-            EpgFilter         = new EpgFilterService(localFactory, loggerFactory.CreateLogger<EpgFilterService>());
-            TmdbEnrichment    = new TmdbEnrichmentService(localFactory, loggerFactory.CreateLogger<TmdbEnrichmentService>());
+            var epgFilePath = Path.Combine(applicationPaths.DataPath, "JellyTV", "epg.xml");
+            EpgFilter = new EpgFilterService(localFactory, epgFilePath, loggerFactory.CreateLogger<EpgFilterService>());
+            DataDirectory = Path.Combine(applicationPaths.DataPath, "JellyTV");
+            CachePath = applicationPaths.CachePath;
+            TmdbEnrichment = new TmdbEnrichmentService(localFactory, loggerFactory.CreateLogger<TmdbEnrichmentService>());
 
             SessionManager.StartAsync(default).GetAwaiter().GetResult();
             PluginLog.Info("All services started OK");
@@ -98,6 +86,189 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         }
 
         PluginLog.Info("=== JellyTV Plugin: ACTIVE ===");
+    }
+
+    // ══ Estado y servicios expuestos ═════════════════════════════════════
+
+    public static Plugin? Instance { get; private set; }
+
+    public RedirectResolverService RedirectResolver { get; }
+
+    public HlsRewriterService HlsRewriter { get; }
+
+    public SessionManagerService SessionManager { get; }
+
+    public ChannelHealthCheckService ChannelHealthCheck { get; }
+
+    public EpgFilterService EpgFilter { get; }
+
+    public TmdbEnrichmentService TmdbEnrichment { get; }
+
+    public IHttpClientFactory HttpClientFactory { get; }
+
+    /// <summary>Gets directorio de datos del plugin (EPG, M3U tuner, etc.).</summary>
+    public string DataDirectory { get; private set; } = string.Empty;
+
+    /// <summary>Gets directorio de caché de Jellyfin (para invalidar la caché XMLTV tras regenerar la guía).</summary>
+    public string CachePath { get; private set; } = string.Empty;
+
+    /// <summary>Gets or sets base URL of the Jellyfin server, set on first access.</summary>
+    public string? KnownBaseUrl { get; set; }
+
+    /// <inheritdoc/>
+    public override string Name => "JellyTV";
+
+    /// <inheritdoc/>
+    public override Guid Id => Guid.Parse("f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c");
+
+    /// <inheritdoc/>
+    public override string Description => "TV channel manager with automatic token renewal for IPTV streams.";
+
+    // ══ Helpers ═════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// User-Agent efectivo del plugin: el de Configuration si está definido, si no el default.
+    /// Siempre saneado (sin CR/LF ni controles) para no romper cabeceras HTTP.
+    /// </summary>
+    /// <returns>El User-Agent a usar.</returns>
+    public static string EffectiveUserAgent()
+    {
+        var configured = Instance?.Configuration?.UserAgent;
+        return string.IsNullOrWhiteSpace(configured) ? DefaultUserAgent : SanitizeHeaderValue(configured);
+    }
+
+    /// <summary>Quita CR/LF y caracteres de control que romperían una cabecera HTTP.</summary>
+    /// <param name="value">Cabecera cruda del usuario.</param>
+    /// <returns>Cabecera saneada.</returns>
+    public static string SanitizeHeaderValue(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(value.Length);
+        foreach (var c in value)
+        {
+            if (c < 0x20 || c == 0x7f)
+            {
+                continue;
+            }
+
+            sb.Append(c);
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    /// <summary>
+    /// Invalida la caché XMLTV de Jellyfin que corresponde a guías generadas por este plugin.
+    /// Jellyfin cachea cada proveedor XMLTV ~1 h (XmlTvListingsProvider); si una descarga coincidió
+    /// con un archivo aún no generado, queda una copia vacía/vieja que impide ver la guía y mapear.
+    /// Tras regenerar epg.xml se borran esas copias para que el Refresh Guide re-descargue la guía
+    /// nueva. Se borran los .xml de la caché xmltv que sean de JellyTV (o de 0 bytes, inútiles).
+    /// </summary>
+    public void InvalidateJellyfinXmltvCache()
+    {
+        try
+        {
+            var dir = Path.Combine(CachePath, "xmltv");
+            if (string.IsNullOrWhiteSpace(CachePath) || !Directory.Exists(dir))
+            {
+                return;
+            }
+
+            foreach (var file in Directory.EnumerateFiles(dir, "*.xml"))
+            {
+                try
+                {
+                    var info = new FileInfo(file);
+                    var isJellyTv = info.Length == 0;
+                    if (!isJellyTv)
+                    {
+                        using var reader = new StreamReader(file);
+                        string? line;
+                        while ((line = reader.ReadLine()) is not null && !isJellyTv)
+                        {
+                            if (line.Contains("<tv ", StringComparison.Ordinal) && line.Contains("JellyTV", StringComparison.Ordinal))
+                            {
+                                isJellyTv = true;
+                            }
+                        }
+                    }
+
+                    if (isJellyTv)
+                    {
+                        File.Delete(file);
+                        PluginLog.Info($"[EPG] Caché XMLTV de Jellyfin invalidada: {Path.GetFileName(file)}");
+                    }
+                }
+                catch
+                {
+                    // Archivo en uso por Jellyfin: se reintentará en el próximo sync.
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"[EPG] No se pudo invalidar la caché XMLTV de Jellyfin: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Migrates legacy channel fields into <see cref="ChannelEntry.Sources"/> and purges invalid
+    /// channels (without a name or without any usable source URL). Optionally persists the change.
+    /// </summary>
+    /// <param name="persist">true para guardar la configuración si hubo cambios.</param>
+    /// <returns>true si la configuración cambió.</returns>
+    public static bool NormalizeChannels(bool persist = true)
+        => Instance is { } plugin ? NormalizeChannels(plugin.Configuration, persist) : false;
+
+    /// <summary>
+    /// Migrates legacy channel fields into <see cref="ChannelEntry.Sources"/> and purges invalid
+    /// channels (without a name or without any usable source URL). Optionally persists the change.
+    /// </summary>
+    /// <param name="cfg">Configuración sobre la que trabajar.</param>
+    /// <param name="persist">true para guardar la configuración si hubo cambios.</param>
+    /// <returns>true si la configuración cambió.</returns>
+    public static bool NormalizeChannels(PluginConfiguration cfg, bool persist = true)
+    {
+        var changed = false;
+        var cleaned = new List<ChannelEntry>(cfg.Channels.Count);
+        foreach (var ch in cfg.Channels)
+        {
+            ch.EnsureMigratedSources();
+            var valid = ch.Sources.Where(s => !string.IsNullOrWhiteSpace(s.Url)).ToList();
+            if (valid.Count != ch.Sources.Count)
+            {
+                changed = true;
+            }
+
+            ch.Sources = valid;
+            if (string.IsNullOrWhiteSpace(ch.Name) || valid.Count == 0)
+            {
+                changed = true;
+                continue;
+            }
+
+            cleaned.Add(ch);
+        }
+
+        if (cleaned.Count != cfg.Channels.Count)
+        {
+            changed = true;
+        }
+
+        if (changed)
+        {
+            cfg.Channels = cleaned;
+            if (persist)
+            {
+                Instance?.SaveConfiguration();
+            }
+        }
+
+        return changed;
     }
 
     private static void ConfigureLogDirectory(IApplicationPaths applicationPaths)
@@ -138,7 +309,24 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         }
     }
 
-    // ── HTTP client factory ───────────────────────────────────────────────────
+    // ══ Plugin pages ════════════════════════════════════════════════════
+
+    /// <inheritdoc/>
+    public IEnumerable<PluginPageInfo> GetPages() =>
+    [
+        new PluginPageInfo
+        {
+            Name = "JellyTV",
+            DisplayName = "JellyTV",
+            EmbeddedResourcePath = $"{GetType().Namespace}.Configuration.configPage.html",
+            // Muestra el acceso directo al plugin en el menú principal (sidebar) del dashboard,
+            // sin tener que entrar en Complementos → JellyTV → Configuración.
+            EnableInMainMenu = true,
+            MenuIcon = "tv"
+        }
+    ];
+
+    // ══ HTTP client factory ─────────────────────────────────────────────
 
     private sealed class LocalHttpClientFactory : IHttpClientFactory
     {
@@ -151,37 +339,29 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             _fallback = fallback;
 
             _clients["IptvNoRedirect"] = Build(userAgent, allowRedirect: false, _sharedCookies);
-            _clients["JellyTV"]        = Build(userAgent, allowRedirect: true, _sharedCookies);
+            _clients["JellyTV"] = Build(userAgent, allowRedirect: true, _sharedCookies);
         }
 
         private static HttpClient Build(string userAgent, bool allowRedirect, CookieContainer cookieContainer)
         {
-            var client = new HttpClient(new SocketsHttpHandler
-            {
-                AllowAutoRedirect = allowRedirect,
-                MaxAutomaticRedirections = 15,
-                UseCookies = true,
-                CookieContainer = cookieContainer,
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-                PooledConnectionLifetime = TimeSpan.FromMinutes(10),
-                SslOptions = { RemoteCertificateValidationCallback = (_, _, _, _) => true }
-            }, disposeHandler: false);
-            client.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
+            var client = new HttpClient(
+                new SocketsHttpHandler
+                {
+                    AllowAutoRedirect = allowRedirect,
+                    MaxAutomaticRedirections = 15,
+                    UseCookies = true,
+                    CookieContainer = cookieContainer,
+                    AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                    PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+                    SslOptions = { RemoteCertificateValidationCallback = (_, _, _, _) => true }
+                },
+                disposeHandler: false);
+            // TryAddWithoutValidation: un User-Agent inválido del usuario no debe tumbar el plugin.
+            client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", userAgent);
             return client;
         }
 
         public HttpClient CreateClient(string name) =>
             _clients.TryGetValue(name, out var c) ? c : _fallback.CreateClient(name);
     }
-
-    // ── Plugin pages ──────────────────────────────────────────────────────────
-
-    public IEnumerable<PluginPageInfo> GetPages() =>
-    [
-        new PluginPageInfo
-        {
-            Name = "JellyTV",
-            EmbeddedResourcePath = $"{GetType().Namespace}.Configuration.ConfigPage.html"
-        }
-    ];
 }
