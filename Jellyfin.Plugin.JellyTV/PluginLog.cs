@@ -47,9 +47,10 @@ public static class PluginLog
     /// <returns>Redacted text.</returns>
     public static string Redact(string value)
     {
+        // Ninguna salida devuelve el valor original sin pasar por la limpieza (CodeQL sigue también este camino).
         if (string.IsNullOrEmpty(value))
         {
-            return value;
+            return string.Empty;
         }
 
         // Sin saltos de línea: un valor externo (URL de una página, cabecera) no puede fabricar entradas falsas en el registro.
