@@ -41,7 +41,7 @@ public static class PluginLog
     // ── Public API ────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Masks credentials and token-like query parameters so logs can be shared safely.
+    /// Masks credentials and token-like query parameters and removes line breaks so logs can be shared safely.
     /// </summary>
     /// <param name="value">Raw text.</param>
     /// <returns>Redacted text.</returns>
@@ -52,8 +52,11 @@ public static class PluginLog
             return value;
         }
 
+        // Sin saltos de línea: un valor externo (URL de una página, cabecera) no puede fabricar entradas falsas en el registro.
         var redacted = UserInfo.Replace(value, "$1***:***@");
-        return SensitiveQuery.Replace(redacted, "$1***");
+        return SensitiveQuery.Replace(redacted, "$1***")
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal);
     }
 
     /// <summary>Appends a timestamped log line at the given level.</summary>

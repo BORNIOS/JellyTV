@@ -315,7 +315,8 @@ public sealed class ProxyPoolService
             return;
         }
 
-        using var tls = new SslStream(tcp.GetStream(), false, static (_, _, _, _) => true);
+        // Validación normal del certificado: es la misma que aplica el uso real del proxy, así la prueba no da por bueno lo que luego falla.
+        using var tls = new SslStream(tcp.GetStream(), false);
         await tls.AuthenticateAsClientAsync(new SslClientAuthenticationOptions { TargetHost = entry.Host }, cancellationToken).ConfigureAwait(false);
     }
 
