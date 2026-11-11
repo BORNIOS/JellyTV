@@ -12,9 +12,9 @@
         "version": "1.0.0.0",
         "changelog": "Primera versión estable. Live TV nativo con canales Directo, FAST y Tokenizado; fuentes de respaldo por canal con salud individual; renovación automática de tokens (de sesión y efímeros); playlist M3U y guía XMLTV para clientes externos; identidad de canal con iptv-org y guía EPG automática; enriquecimiento TMDB opcional; panel de administración con búsqueda y orden; almacenamiento en PostgreSQL o JSON. Requiere Jellyfin 12.1 o superior.",
         "targetAbi": "12.1.0.0",
-        "sourceUrl": "",
-        "checksum": "",
-        "timestamp": "2026-11-11T00:00:00Z"
+        "sourceUrl": "https://github.com/BORNIOS/JellyTV/releases/download/v1.0.0/Jellyfin.Plugin.JellyTV-1.0.0.0.zip",
+        "checksum": "07a243e8291deb288b2bdfb9ff2ce2d3",
+        "timestamp": "2026-11-11T08:40:24Z"
       }
     ]
   }
