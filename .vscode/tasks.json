@@ -1,0 +1,82 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "deploy",
+      "detail": "Build, copy DLL to Jellyfin plugins folder, and restart Jellyfin.",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "build",
+        "copy-to-jellyfin",
+        "restart-jellyfin"
+      ]
+    },
+    {
+      "label": "deploy-no-restart",
+      "detail": "Build and copy DLL without restarting Jellyfin.",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "build",
+        "copy-to-jellyfin"
+      ]
+    },
+    {
+      "label": "build",
+      "detail": "dotnet publish Release → bin/Release/net10.0/publish/",
+      "command": "dotnet",
+      "type": "shell",
+      "args": [
+        "publish",
+        "${workspaceFolder}/Jellyfin.Plugin.JellyTV/Jellyfin.Plugin.JellyTV.csproj",
+        "--configuration=Release",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary"
+      ],
+      "group": "build",
+      "presentation": {
+        "reveal": "silent"
+      },
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "copy-to-jellyfin",
+      "detail": "Stop Jellyfin and copy the plugin DLL to the plugins folder.",
+      "type": "shell",
+      "windows": {
+        "options": {
+          "shell": {
+            "executable": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-Command"
+            ]
+          }
+        }
+      },
+      "command": "Stop-Process -Name 'jellyfin' -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1; Remove-Item -Force -Path '${config:jellyfinPluginDir}/JellyTV.dll' -ErrorAction SilentlyContinue; Copy-Item -Force -Path '${workspaceFolder}/Jellyfin.Plugin.JellyTV/bin/Release/net10.0/Jellyfin.Plugin.JellyTV.dll' -Destination '${config:jellyfinPluginDir}/Jellyfin.Plugin.JellyTV.dll'",
+      "presentation": {
+        "reveal": "silent"
+      }
+    },
+    {
+      "label": "restart-jellyfin",
+      "detail": "Start Jellyfin (stop happens in copy-to-jellyfin).",
+      "type": "shell",
+      "windows": {
+        "options": {
+          "shell": {
+            "executable": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-Command"
+            ]
+          }
+        }
+      },
+      "command": "Start-Process -FilePath 'dotnet' -ArgumentList 'exec', '${config:jellyfinDir}/jellyfin.dll', '--datadir', '${config:jellyfinDataDir}' -WindowStyle Hidden",
+      "presentation": {
+        "reveal": "always"
+      }
+    }
+  ]
+}

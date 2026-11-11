@@ -3,25 +3,28 @@
 # Used by the Jellyfin Plugin Repository system.
 # See: https://jellyfin.org/docs/general/server/plugins/
 
-name: JellyTV
-guid: f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c
+name: "JellyTV"
+guid: "f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c"
 description: >
-  IPTV proxy plugin with automatic token renewal, HLS broadcast engine,
-  and configurable M3U source management.
+  Jellyfin Live TV plugin that exposes individual IPTV channels (Directo, FAST
+  and Tokenizado) with automatic token renewal, backup sources, an automatic EPG
+  guide, no transcoding and no M3U tuner.
 
 overview: >
-  JellyTV aggregates multiple M3U/IPTV sources, rewrites stream URLs through
-  an internal proxy, and maintains HLS playback sessions with rotating token
-  refresh — providing stable Live TV across providers that use short-lived tokens.
+  "JellyTV expone tus canales IPTV como un proveedor nativo de Live TV. Los canales
+  Directo se entregan tal cual; los FAST y Tokenizados pasan por un relay que
+  reescribe el HLS y mantiene el token fresco (por sesión o efímero). Cada canal
+  puede tener fuentes de respaldo, y la guía EPG se completa sola a partir de
+  iptv-org. Sin transcodificación."
 
-category: LiveTV
-owner: jorge.chavez@nezter.com
+category: "LiveTV"
+owner: ".:BORNIOS:."
 imageUrl: ""
 
 versions:
-  - version: 1.0.0.0
-    changelog: Simplified broadcast engine — full-chain resolve per poll, proxy rotation, no token state.
-    targetAbi: "10.10.0.0"
+  - version: "1.0.0.0"
+    changelog: "Primera versión estable. Live TV nativo con canales Directo, FAST y Tokenizado; fuentes de respaldo por canal con salud individual; renovación automática de tokens (de sesión y efímeros); playlist M3U y guía XMLTV para clientes externos; identidad de canal con iptv-org y guía EPG automática; enriquecimiento TMDB opcional; panel de administración con búsqueda y orden; almacenamiento en PostgreSQL o JSON. Requiere Jellyfin 12.1 o superior."
+    targetAbi: "12.1.0.0"
     sourceUrl: ""
     checksum: ""
-    timestamp: "2026-04-21T00:00:00Z"
+    timestamp: "2026-11-11T00:00:00Z"

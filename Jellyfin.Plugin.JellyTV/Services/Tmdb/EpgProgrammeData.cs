@@ -1,0 +1,73 @@
+namespace Jellyfin.Plugin.JellyTV.Services.Tmdb;
+
+/// <summary>
+/// Rich metadata extracted inline from a single &lt;programme&gt; element while streaming
+/// the XMLTV file.  Populated by <c>EpgFilterService.ParseProgrammeData</c> and consumed
+/// by <c>TmdbEnrichmentService.EnrichProgrammesAsync</c> for inline TMDB enrichment.
+/// </summary>
+internal sealed class EpgProgrammeData
+{
+    /// <summary>Gets title in Spanish (or primary EPG language).</summary>
+    public string? TitleEs { get; init; }
+
+    /// <summary>
+    /// Gets title in English — preferred for TMDB search because English coverage
+    /// is significantly higher and match rates are much better.
+    /// </summary>
+    public string? TitleEn { get; init; }
+
+    /// <summary>Gets first &lt;desc&gt; element content.</summary>
+    public string? Description { get; init; }
+
+    /// <summary>Gets first &lt;category&gt; element content.</summary>
+    public string? Category { get; init; }
+
+    /// <summary>Gets year parsed from the first 4 digits of &lt;date&gt;.</summary>
+    public int? Year { get; init; }
+
+    /// <summary>Gets the first &lt;episode-num&gt; value (for example <c>S1 E9</c>), if present.</summary>
+    public string? EpisodeNum { get; init; }
+
+    /// <summary>Gets src attribute from &lt;icon&gt;, if present.</summary>
+    public string? ExistingIconUrl { get; init; }
+
+    /// <summary>
+    /// Gets best title for TMDB search: English is used when available because TMDB
+    /// results are dramatically more accurate with English titles.
+    /// Falls back to the primary (Spanish) title.
+    /// </summary>
+    public string BestTitle =>
+        !string.IsNullOrWhiteSpace(TitleEn) ? TitleEn :
+        !string.IsNullOrWhiteSpace(TitleEs) ? TitleEs : string.Empty;
+
+    /// <summary>
+    /// Gets secondary title in the other language, used as an additional TMDB search variant.
+    /// Only present when both TitleEn and TitleEs are non-empty.
+    /// </summary>
+    public string? FallbackTitle =>
+        !string.IsNullOrWhiteSpace(TitleEn) && !string.IsNullOrWhiteSpace(TitleEs)
+            ? TitleEs : null;
+
+    /// <summary>
+    /// Gets a value indicating whether true when the &lt;icon&gt; URL points to image.tmdb.org, meaning the EPG
+    /// provider already enriched this programme from TMDB.
+    /// </summary>
+    public bool HasTmdbIcon =>
+        !string.IsNullOrWhiteSpace(ExistingIconUrl)
+        && ExistingIconUrl!.Contains("image.tmdb.org", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Returns a copy of this data without the icon, used when the icon URL of the source turned out to be dead.
+    /// </summary>
+    /// <returns>A copy with no icon.</returns>
+    internal EpgProgrammeData WithoutIcon() => new()
+    {
+        TitleEs = TitleEs,
+        TitleEn = TitleEn,
+        Description = Description,
+        Category = Category,
+        Year = Year,
+        EpisodeNum = EpisodeNum,
+        ExistingIconUrl = null,
+    };
+}

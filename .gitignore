@@ -2,9 +2,6 @@
 bin/
 obj/
 
-# IA Assistant
-.claude/
-
 # Visual Studio / Rider
 .vs/
 .idea/
