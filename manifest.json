@@ -2,19 +2,19 @@
   {
     "guid": "f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c",
     "name": "JellyTV",
-    "description": "Jellyfin Live TV plugin that manages individual IPTV channels (direct, FAST and tokenized) with automatic token renewal, without requiring an external M3U tuner.",
-    "overview": "JellyTV expone tus canales IPTV como un proveedor nativo de Live TV: canales Directo/FAST se sirven por relay reescribiendo el HLS, y los Tokenizados resuelven la cadena/gateway (redirects o HTML con token embebido) y mantienen el token fresco (por sesión o efímero) sin transcodificación ni remuxing.",
+    "description": "Jellyfin Live TV plugin that manages individual IPTV channels (direct, FAST and tokenized) with automatic token renewal, backup sources and an automatic EPG guide, without requiring an external M3U tuner.",
+    "overview": "JellyTV expone tus canales IPTV como un proveedor nativo de Live TV. Los canales Directo se entregan tal cual; los FAST y Tokenizados pasan por un relay que reescribe el HLS y mantiene el token fresco (por sesión o efímero). Cada canal puede tener fuentes de respaldo, y la guía EPG se completa sola a partir de iptv-org. Sin transcodificación.",
     "owner": ".:BORNIOS:.",
     "category": "LiveTV",
     "imageUrl": "",
     "versions": [
       {
         "version": "1.0.0.0",
-        "changelog": "Compatibilidad con Jellyfin 12.1 (.NET 10): retarget a Jellyfin.Controller/Model 12.1.0, seguridad de endpoints y relay, y nueva interfaz.",
+        "changelog": "Primera versión estable. Live TV nativo con canales Directo, FAST y Tokenizado; fuentes de respaldo por canal con salud individual; renovación automática de tokens (de sesión y efímeros); playlist M3U y guía XMLTV para clientes externos; identidad de canal con iptv-org y guía EPG automática; enriquecimiento TMDB opcional; panel de administración con búsqueda y orden; almacenamiento en PostgreSQL o JSON. Requiere Jellyfin 12.1 o superior.",
         "targetAbi": "12.1.0.0",
         "sourceUrl": "",
         "checksum": "",
-        "timestamp": "2026-10-18T00:00:00Z"
+        "timestamp": "2026-11-11T00:00:00Z"
       }
     ]
   }
