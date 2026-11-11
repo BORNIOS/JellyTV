@@ -54,9 +54,13 @@ public static class PluginLog
 
         // Sin saltos de línea: un valor externo (URL de una página, cabecera) no puede fabricar entradas falsas en el registro.
         var redacted = UserInfo.Replace(value, "$1***:***@");
+        // string.Replace(string, string) compara de forma ordinal; es la forma de eliminar saltos de línea que CodeQL reconoce como saneamiento.
+#pragma warning disable CA1307
         return SensitiveQuery.Replace(redacted, "$1***")
-            .Replace("\r", " ", StringComparison.Ordinal)
-            .Replace("\n", " ", StringComparison.Ordinal);
+            .Replace(Environment.NewLine, " ")
+            .Replace("\n", " ")
+            .Replace("\r", " ");
+#pragma warning restore CA1307
     }
 
     /// <summary>Appends a timestamped log line at the given level.</summary>
