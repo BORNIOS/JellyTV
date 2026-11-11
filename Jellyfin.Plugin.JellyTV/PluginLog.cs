@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text.RegularExpressions;
 
 namespace Jellyfin.Plugin.JellyTV;
 
@@ -13,6 +14,14 @@ public static class PluginLog
     private const int RetentionDays = 5;
 
     private static readonly object Lock = new();
+
+    private static readonly Regex SensitiveQuery = new(
+        @"(?i)([?&](?:token|access_token|auth|authorization|signature|sig|key|password|pass|pwd|hdnts|wmsauthsign|expires)=)([^&\s""']+)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex UserInfo = new(
+        @"(?i)(https?://)([^/\s:@]+):([^/\s@]+)@",
+        RegexOptions.Compiled);
 
     // Base directory — updated by SetLogDirectory
     private static string _logDir = Path.Combine(
@@ -31,13 +40,29 @@ public static class PluginLog
 
     // ── Public API ────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Masks credentials and token-like query parameters so logs can be shared safely.
+    /// </summary>
+    /// <param name="value">Raw text.</param>
+    /// <returns>Redacted text.</returns>
+    public static string Redact(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        var redacted = UserInfo.Replace(value, "$1***:***@");
+        return SensitiveQuery.Replace(redacted, "$1***");
+    }
+
     /// <summary>Appends a timestamped log line at the given level.</summary>
     public static void Write(string level, string message)
     {
         try
         {
             var now = DateTimeOffset.Now;
-            var line = $"[{now:yyyy-MM-dd HH:mm:ss.fff}] [{level}] {message}{Environment.NewLine}";
+            var line = $"[{now:yyyy-MM-dd HH:mm:ss.fff}] [{level}] {Redact(message)}{Environment.NewLine}";
             lock (Lock)
             {
                 EnsureDirectory();

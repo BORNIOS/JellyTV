@@ -18,11 +18,14 @@ namespace Jellyfin.Plugin.JellyTV.ScheduledTask;
 /// </summary>
 public class ChannelHealthCheckTask : IScheduledTask
 {
-    private static readonly string[] NewLineSeparators = ["\r\n", "\r", "\n"];
-
     private readonly ILogger<ChannelHealthCheckTask> _logger;
     private readonly ITaskManager _taskManager;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ChannelHealthCheckTask"/> class.
+    /// </summary>
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="taskManager">Jellyfin task manager used to queue guide refreshes.</param>
     public ChannelHealthCheckTask(
         ILogger<ChannelHealthCheckTask> logger,
         ITaskManager taskManager)
@@ -108,61 +111,6 @@ public class ChannelHealthCheckTask : IScheduledTask
             _logger.LogError(ex, "[HEALTH-TASK] Unhandled exception");
             PluginLog.Error("[HEALTH-TASK] Unhandled exception", ex);
         }
-    }
-
-    /// <summary>
-    /// Parses an M3U source and extracts channel names and URLs.
-    /// </summary>
-    private async Task<List<(string Name, string Url)>> ParseM3uChannelsAsync(
-        string sourceUrl,
-        CancellationToken cancellationToken)
-    {
-        var channels = new List<(string, string)>();
-
-        try
-        {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(30));
-
-            var client = Plugin.Instance?.HttpClientFactory?.CreateClient("JellyTV");
-            if (client is null)
-            {
-                return channels;
-            }
-
-            var content = await client.GetStringAsync(sourceUrl, cts.Token).ConfigureAwait(false);
-            var lines = content.Split(NewLineSeparators, StringSplitOptions.None);
-
-            string? currentName = null;
-            foreach (var line in lines)
-            {
-                var trimmed = line.Trim();
-
-                if (trimmed.StartsWith("#EXTINF:", StringComparison.Ordinal))
-                {
-                    var commaIndex = trimmed.LastIndexOf(',');
-                    currentName = commaIndex >= 0 && commaIndex + 1 < trimmed.Length
-                        ? trimmed[(commaIndex + 1)..].Trim()
-                        : "(Sin nombre)";
-                }
-                else if (!string.IsNullOrEmpty(trimmed) && !trimmed.StartsWith('#'))
-                {
-                    // This is a URL
-                    if (!string.IsNullOrEmpty(currentName))
-                    {
-                        channels.Add((currentName, trimmed));
-                    }
-
-                    currentName = null;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            PluginLog.Warn($"[HEALTH-TASK] Failed to parse M3U from {sourceUrl}: {ex.Message}");
-        }
-
-        return channels;
     }
 
     /// <inheritdoc/>

@@ -42,18 +42,18 @@ internal sealed class TmdbClient : ITmdbClient
 
     public Task<TmdbSearchResponse?> SearchMultiAsync(string apiKey, string query, string language, CancellationToken ct)
     {
-        var url = $"{TmdbBase}/search/multi?api_key={Uri.EscapeDataString(apiKey)}&query={Uri.EscapeDataString(query)}&language={language}&include_adult=false&page=1";
-        return SendWithRetryAsync<TmdbSearchResponse>(url, ct);
+        var url = $"{TmdbBase}/search/multi?{TmdbAuth.Query(apiKey)}&query={Uri.EscapeDataString(query)}&language={language}&include_adult=false&page=1";
+        return SendWithRetryAsync<TmdbSearchResponse>(url, apiKey, ct);
     }
 
     public Task<TmdbDetailResponse?> GetDetailAsync(string apiKey, string mediaType, int id, string language, CancellationToken ct)
     {
         var append = "credits,images,external_ids,videos,release_dates,content_ratings,keywords,translations,alternative_titles";
-        var url = $"{TmdbBase}/{mediaType}/{id}?api_key={Uri.EscapeDataString(apiKey)}&language={language}&append_to_response={append}";
-        return SendWithRetryAsync<TmdbDetailResponse>(url, ct);
+        var url = $"{TmdbBase}/{mediaType}/{id}?{TmdbAuth.Query(apiKey)}&language={language}&append_to_response={append}";
+        return SendWithRetryAsync<TmdbDetailResponse>(url, apiKey, ct);
     }
 
-    private async Task<T?> SendWithRetryAsync<T>(string url, CancellationToken ct)
+    private async Task<T?> SendWithRetryAsync<T>(string url, string credential, CancellationToken ct)
         where T : class
     {
         const int maxAttempts = 5;
@@ -68,6 +68,7 @@ internal sealed class TmdbClient : ITmdbClient
                 Metrics.IncrementRequests();
                 using var req = new HttpRequestMessage(HttpMethod.Get, url);
                 req.Headers.Accept.ParseAdd("application/json");
+                TmdbAuth.Apply(req, credential);
 
                 using var resp = await _client.SendAsync(req, ct).ConfigureAwait(false);
 
@@ -83,7 +84,11 @@ internal sealed class TmdbClient : ITmdbClient
 
                 var delay = ComputeBackoffWithJitter(attempt);
                 Metrics.IncrementRetries();
-                _logger.LogDebug("[JellyTV] TMDB retry attempt={Attempt} status={Status} waitMs={Delay}", attempt, (int)resp.StatusCode, (int)delay.TotalMilliseconds);
+                if (_logger.IsEnabled(LogLevel.Debug))
+                {
+                    _logger.LogDebug("[JellyTV] TMDB retry attempt={Attempt} status={Status} waitMs={Delay}", attempt, (int)resp.StatusCode, (int)delay.TotalMilliseconds);
+                }
+
                 await Task.Delay(delay, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)

@@ -1,11 +1,19 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace Jellyfin.Plugin.JellyTV.Models;
 
+/// <summary>
+/// Active playback session for a channel, including token renewal state.
+/// </summary>
 public class StreamSession
 {
+    private int _pollRunning;
+
+    internal ConcurrentDictionary<string, Services.HlsTimeline> PlaylistTimelines { get; } = new(StringComparer.Ordinal);
+
     /// <summary>
     /// Gets or sets the unique session ID.
     /// </summary>
@@ -24,6 +32,43 @@ public class StreamSession
     public System.Collections.Concurrent.ConcurrentDictionary<string, (string FinalUrl, DateTimeOffset Expiry)> SegmentResolveCache { get; } = new();
 
     /// <summary>
+    /// Gets the in-memory cache of the newest segments, shared by every viewer of the channel.
+    /// </summary>
+    public Services.SegmentCache SegmentCache { get; } = new();
+
+    /// <summary>
+    /// Gets or sets when the token generator last rejected a renewal (403). While this is recent the
+    /// plugin stops calling the generator: providers that rate-limit it only recover if left alone.
+    /// </summary>
+    public DateTimeOffset? LastGeneratorRejectionAt { get; set; }
+
+    /// <summary>
+    /// Gets or sets how long, in seconds, the token generator makes us wait between two tokens. It starts
+    /// at a conservative value and grows by itself each time the generator rejects a request that came
+    /// too early, so each source converges on its own provider's limit with no hard-coded provider rules.
+    /// </summary>
+    public double MintIntervalSeconds { get; set; } = 45;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the current token is known to be dead (the provider
+    /// answered 401/403) and no new one could be minted yet.
+    /// </summary>
+    public bool TokenKnownDead { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether asking the generator for a token now would only be rejected.
+    /// </summary>
+    public bool InGeneratorBackoff =>
+        (LastTokenRenewedAt is { } minted && DateTimeOffset.UtcNow - minted < TimeSpan.FromSeconds(MintIntervalSeconds))
+        || (LastGeneratorRejectionAt is { } rejected && DateTimeOffset.UtcNow - rejected < TimeSpan.FromSeconds(4));
+
+    /// <summary>
+    /// Gets the set of upstream hosts observed in the rewritten playlist for this session.
+    /// Used to reject arbitrary URLs on the segment proxy.
+    /// </summary>
+    public ConcurrentDictionary<string, byte> AllowedHosts { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Gets or sets the original upstream URL.
     /// </summary>
     public string UpstreamUrl { get; set; } = string.Empty;
@@ -33,6 +78,11 @@ public class StreamSession
     /// Determines whether the session resolves the upstream through JellyTV.
     /// </summary>
     public int ChannelType { get; set; }
+
+    /// <summary>
+    /// Gets or sets the country whose proxies this session downloads through, or empty when it downloads directly.
+    /// </summary>
+    public string? ExitCountry { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether the channel token is issued for the whole
@@ -184,4 +234,86 @@ public class StreamSession
     /// Gets or sets background keep-alive task reference.
     /// </summary>
     public System.Threading.Tasks.Task? KeepAliveTask { get; set; }
+
+    /// <summary>
+    /// Gets the limiter for concurrent segment prefetches of this channel.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public SemaphoreSlim PrefetchGate { get; } = new SemaphoreSlim(4, 4);
+
+    /// <summary>
+    /// Gets the per-session limiter for concurrent upstream segment fetches.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public SemaphoreSlim SegmentFetchLimiter { get; } = new SemaphoreSlim(6, 6);
+
+    /// <summary>
+    /// Records the host of an absolute URL as allowed for segment proxying.
+    /// </summary>
+    /// <param name="url">Absolute upstream URL.</param>
+    public void AllowHostFromUrl(string? url)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && !string.IsNullOrWhiteSpace(uri.Host))
+        {
+            AllowedHosts[uri.Host] = 0;
+        }
+    }
+
+    /// <summary>
+    /// Determines whether the URL may be fetched through the segment proxy.
+    /// </summary>
+    /// <param name="url">Absolute upstream URL.</param>
+    /// <returns><c>true</c> when the scheme is HTTP(S) and the host is allowed.</returns>
+    public bool IsUrlAllowed(string? url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+        {
+            return false;
+        }
+
+        if (AllowedHosts.ContainsKey(uri.Host)
+            || string.Equals(uri.Host, PreferredHost, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return HostMatches(UpstreamUrl, uri.Host)
+            || HostMatches(LastResolved?.FinalUrl, uri.Host)
+            || HostMatches(LastResolved?.BaseUrl, uri.Host);
+    }
+
+    private static bool HostMatches(string? url, string host) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri)
+        && string.Equals(uri.Host, host, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Claims the background refresh of this session.
+    /// </summary>
+    /// <returns><c>true</c> when no other refresh is running.</returns>
+    public bool TryBeginPoll() => Interlocked.CompareExchange(ref _pollRunning, 1, 0) == 0;
+
+    /// <summary>
+    /// Releases the background refresh claimed with <see cref="TryBeginPoll"/>.
+    /// </summary>
+    public void EndPoll() => Interlocked.Exchange(ref _pollRunning, 0);
+
+    /// <summary>
+    /// Records that the generator rejected a request and learns from how early it was.
+    /// </summary>
+    public void RecordGeneratorRejection()
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (LastTokenRenewedAt is { } minted)
+        {
+            var elapsed = (now - minted).TotalSeconds;
+            MintIntervalSeconds = Math.Clamp(Math.Max(MintIntervalSeconds, elapsed + 8), 20, 120);
+        }
+
+        LastGeneratorRejectionAt = now;
+    }
 }

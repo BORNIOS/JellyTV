@@ -68,6 +68,7 @@ internal sealed class MatchEvaluator : IMatchEvaluator
             var langBonus = PreferredLanguageBonus(c, preferredLanguages);
 
             var mismatch = ComputeMismatchPenalty(query, candNorm, item, c);
+            var countryBonus = !string.IsNullOrWhiteSpace(item.Country) && c.OriginCountry?.Contains(item.Country, StringComparer.OrdinalIgnoreCase) == true ? 1.0 : 0.0;
 
             var score =
                 (exact * _weights.ExactNormalized) +
@@ -79,7 +80,8 @@ internal sealed class MatchEvaluator : IMatchEvaluator
                 (popBonus * _weights.PopularityBonus) +
                 (mediaBonus * _weights.MediaTypeBonus) +
                 (langBonus * _weights.CountryLangBonus) +
-                (aliasBonus * _weights.AliasBonus) -
+                (aliasBonus * _weights.AliasBonus) +
+                (countryBonus * _weights.CountryMatchBonus) -
                 (mismatch * _weights.MismatchPenalty);
 
             scored.Add(new CandidateScore

@@ -10,6 +10,12 @@ internal sealed class TmdbMetadata
 
     public int? TmdbId { get; init; }
 
+    /// <summary>Gets an absolute poster/backdrop URL when the match comes from a provider other than TMDB.</summary>
+    public string? ImageUrl { get; init; }
+
+    /// <summary>Gets the provider the match came from (TMDB, TVmaze, or the name of a Jellyfin metadata provider).</summary>
+    public string? SourceName { get; init; }
+
     public string? MediaType { get; init; }
 
     public string? Overview { get; init; }

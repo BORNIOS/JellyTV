@@ -18,15 +18,24 @@ namespace Jellyfin.Plugin.JellyTV.Services;
 /// </summary>
 public class SessionManagerService : BackgroundService
 {
+    private const int CleanupEveryTicks = 5;
+
     private readonly ConcurrentDictionary<string, StreamSession> _sessions = new();
     private readonly ConcurrentDictionary<string, StreamSession> _sessionsById = new();
     private readonly ConcurrentDictionary<string, Lazy<Task<StreamSession>>> _sessionCreations = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _resolveFailures = new();
     private readonly RedirectResolverService _resolver;
     private readonly ILogger<SessionManagerService> _logger;
+    private readonly UpstreamClientService _upstream;
 
     // Sessions inactive longer than this are cleaned up
     private static readonly TimeSpan SessionTimeout = TimeSpan.FromMinutes(30);
+
+    /// <summary>How often the background poller looks for channels that need a refresh.</summary>
+    private static readonly TimeSpan PollTick = TimeSpan.FromSeconds(2);
+
+    /// <summary>A channel counts as watched while a viewer touched it this recently.</summary>
+    private static readonly TimeSpan ViewerIdleTimeout = TimeSpan.FromSeconds(45);
 
     // After a non-auth upstream failure (400, 5xx), wait this long before retrying
     private static readonly TimeSpan ResolveFailureBackoff = TimeSpan.FromSeconds(15);
@@ -36,9 +45,11 @@ public class SessionManagerService : BackgroundService
     /// </summary>
     public SessionManagerService(
         RedirectResolverService resolver,
+        UpstreamClientService upstream,
         ILogger<SessionManagerService> logger)
     {
         _resolver = resolver;
+        _upstream = upstream;
         _logger = logger;
     }
 
@@ -47,26 +58,22 @@ public class SessionManagerService : BackgroundService
     /// channelType: 0=Direct, 1=FAST, 2=Tokenizado.
     /// Direct/FAST channels skip the token-chain resolution for instant start.
     /// </summary>
+    /// <param name="upstreamUrl">Source URL.</param>
+    /// <param name="channelType">Source type.</param>
+    /// <param name="sessionToken">The source's session-token checkbox: <c>true</c> = token that lasts hours, <c>false</c> = ephemeral token.</param>
+    /// <param name="exitCountry">Country whose proxies the session downloads through, or null to download directly.</param>
+    /// <param name="ct">Cancellation token.</param>
     /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
-    public Task<StreamSession> GetOrCreateSessionAsync(string upstreamUrl, int channelType, CancellationToken ct = default)
+    public Task<StreamSession> GetOrCreateSessionAsync(string upstreamUrl, int channelType, bool sessionToken, string? exitCountry, CancellationToken ct = default)
     {
         var lazy = _sessionCreations.GetOrAdd(
             upstreamUrl,
             key => new Lazy<Task<StreamSession>>(
-                () => CreateSessionAsync(key, channelType, ct),
+                () => CreateSessionAsync(key, channelType, sessionToken, exitCountry, ct),
                 LazyThreadSafetyMode.ExecutionAndPublication));
 
         return AwaitSessionCreationAsync(upstreamUrl, lazy);
     }
-
-    /// <summary>
-    /// Creates or retrieves a session for the given upstream URL.
-    /// Follows redirects on creation to obtain the initial resolved stream.
-    /// Defaults to Tokenizado (full resolve) for callers that don't pass a type.
-    /// </summary>
-    /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
-    public Task<StreamSession> GetOrCreateSessionAsync(string upstreamUrl, CancellationToken ct = default)
-        => GetOrCreateSessionAsync(upstreamUrl, ChannelEntry.TokenizedType, ct);
 
     private async Task<StreamSession> AwaitSessionCreationAsync(
         string upstreamUrl,
@@ -84,7 +91,7 @@ public class SessionManagerService : BackgroundService
         }
     }
 
-    private async Task<StreamSession> CreateSessionAsync(string upstreamUrl, int channelType, CancellationToken ct)
+    private async Task<StreamSession> CreateSessionAsync(string upstreamUrl, int channelType, bool sessionToken, string? exitCountry, CancellationToken ct)
     {
         // Use URL as key so the same channel reuses its session
         var key = upstreamUrl;
@@ -101,13 +108,18 @@ public class SessionManagerService : BackgroundService
                     existing.SessionId,
                     existing.UpstreamUrl,
                     key);
-                _sessions.TryRemove(key, out _);
-                _sessionsById.TryRemove(existing.SessionId, out _);
+                _sessions.TryRemove(new KeyValuePair<string, StreamSession>(key, existing));
+                _sessionsById.TryRemove(new KeyValuePair<string, StreamSession>(existing.SessionId, existing));
             }
             else
             {
                 existing.LastAccessedAt = DateTimeOffset.UtcNow;
-                _logger.LogDebug("[JellyTV] Reusing session {Id} for {Url}", existing.SessionId, upstreamUrl);
+                existing.ExitCountry = exitCountry;
+                if (_logger.IsEnabled(LogLevel.Debug))
+                {
+                    _logger.LogDebug("[JellyTV] Reusing session {Id} for {Url}", existing.SessionId, PluginLog.Redact(upstreamUrl));
+                }
+
                 return existing;
             }
         }
@@ -117,18 +129,18 @@ public class SessionManagerService : BackgroundService
             DateTimeOffset.UtcNow - failedAt < ResolveFailureBackoff)
         {
             var remaining = (int)(ResolveFailureBackoff - (DateTimeOffset.UtcNow - failedAt)).TotalSeconds;
-            _logger.LogWarning("[JellyTV] Upstream {Url} in failure backoff ({Sec}s remaining), skipping resolve", upstreamUrl, remaining);
+            _logger.LogWarning("[JellyTV] Upstream {Url} in failure backoff ({Sec}s remaining), skipping resolve", PluginLog.Redact(upstreamUrl), remaining);
             throw new HttpRequestException(
                 $"Upstream recently failed — backoff {remaining}s remaining.",
                 null,
                 System.Net.HttpStatusCode.BadGateway);
         }
 
-        var session = new StreamSession { UpstreamUrl = upstreamUrl, ChannelType = channelType };
+        // El id deriva de la URL: tras un reinicio o una evicción los clientes siguen usando su id y el relay lo puede recrear.
+        var session = new StreamSession { SessionId = StableId(upstreamUrl), UpstreamUrl = upstreamUrl, ChannelType = channelType, ExitCountry = exitCountry };
 
-        // El canal decide si su token es de sesión (no renovar proactivamente) o efímero.
-        session.SessionToken = Plugin.Instance?.Configuration?.Channels
-            .FirstOrDefault(c => string.Equals(c.Url, upstreamUrl, StringComparison.Ordinal))?.SessionToken ?? false;
+        // Lo decide el checkbox de la fuente (token de sesión = dura horas; sin marcar = token efímero).
+        session.SessionToken = sessionToken;
 
         try
         {
@@ -136,11 +148,19 @@ public class SessionManagerService : BackgroundService
             {
                 // Directo/FAST: sin cadena de tokens — usar la URL tal cual para arranque instantaneo.
                 var isHls = upstreamUrl.Contains(".m3u8", StringComparison.OrdinalIgnoreCase);
+                var finalUrl = upstreamUrl;
+                if (!isHls && UpstreamClientService.RequiresExit(exitCountry))
+                {
+                    // Una dirección sin extensión (un redirect de un servicio FAST) no dice qué es. Con salida por país el
+                    // dispositivo nunca podría abrirla (está bloqueada para él), así que se descubre aquí, por el proxy.
+                    (isHls, finalUrl) = await ProbeExitStreamAsync(upstreamUrl, exitCountry, ct).ConfigureAwait(false);
+                }
+
                 session.LastResolved = new ResolvedStream
                 {
                     OriginalUrl = upstreamUrl,
-                    FinalUrl = upstreamUrl,
-                    BaseUrl = BuildBaseUrl(upstreamUrl),
+                    FinalUrl = finalUrl,
+                    BaseUrl = BuildBaseUrl(finalUrl),
                     IsHls = isHls,
                     ContentType = isHls ? "application/vnd.apple.mpegurl" : string.Empty,
                     ResolvedAt = DateTimeOffset.UtcNow,
@@ -169,11 +189,52 @@ public class SessionManagerService : BackgroundService
             throw;
         }
 
+        session.AllowHostFromUrl(session.UpstreamUrl);
+        session.AllowHostFromUrl(session.LastResolved?.FinalUrl);
+        session.AllowHostFromUrl(session.LastResolved?.BaseUrl);
         _sessions[key] = session;
         _sessionsById[session.SessionId] = session;
-        _logger.LogInformation("[JellyTV] Created session {Id} for {Url}", session.SessionId, upstreamUrl);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("[JellyTV] Created session {Id} for {Url}", session.SessionId, PluginLog.Redact(upstreamUrl));
+        }
+
         return session;
     }
+
+    /// <summary>
+    /// Descarga el comienzo de una dirección por el proxy del país de salida para saber si es una lista HLS y a dónde
+    /// redirige.
+    /// </summary>
+    private async Task<(bool IsHls, string FinalUrl)> ProbeExitStreamAsync(string url, string? exitCountry, CancellationToken ct)
+    {
+        using var client = _upstream.For(exitCountry, url);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(20));
+        using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? url;
+        var mediaType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+        var isHls = mediaType.Contains("mpegurl", StringComparison.OrdinalIgnoreCase)
+            || finalUrl.Contains(".m3u8", StringComparison.OrdinalIgnoreCase);
+        if (!isHls)
+        {
+            var head = new byte[16];
+            using var body = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+            var read = await body.ReadAsync(head, timeout.Token).ConfigureAwait(false);
+            isHls = read >= 7 && System.Text.Encoding.ASCII.GetString(head, 0, 7) == "#EXTM3U";
+        }
+
+        return (isHls, finalUrl);
+    }
+
+    /// <summary>
+    /// Session id for a source URL: stable across restarts (not a secret; the relay key and the host check still apply).
+    /// </summary>
+    /// <param name="upstreamUrl">Session key (source URL).</param>
+    /// <returns>32 hex characters.</returns>
+    public static string StableId(string upstreamUrl) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(upstreamUrl)))[..32].ToLowerInvariant();
 
     /// <summary>
     /// Returns all active sessions for diagnostics.
@@ -210,6 +271,12 @@ public class SessionManagerService : BackgroundService
         if (session.SessionToken
             && session.LastTokenRenewedAt is { } lastRenewed
             && DateTimeOffset.UtcNow - lastRenewed < TimeSpan.FromSeconds(8))
+        {
+            return;
+        }
+
+        // El generador rechazó hace poco: reintentarlo por cada segmento 403 solo prolonga su límite.
+        if (session.InGeneratorBackoff)
         {
             return;
         }
@@ -254,19 +321,19 @@ public class SessionManagerService : BackgroundService
                 }
 
                 session.IsRenewing = true;
-                if (Plugin.Instance?.Configuration.VerboseLogging == true)
+                if (Plugin.Instance?.Configuration.VerboseLogging == true && _logger.IsEnabled(LogLevel.Information))
                 {
                     _logger.LogInformation(
                         "[JellyTV] Renewing token for session {Id} upstream={Url}",
                         session.SessionId,
-                        session.UpstreamUrl);
+                        PluginLog.Redact(session.UpstreamUrl));
                 }
-                else
+                else if (_logger.IsEnabled(LogLevel.Debug))
                 {
                     _logger.LogDebug(
                         "[JellyTV] Renewing token for session {Id} upstream={Url}",
                         session.SessionId,
-                        session.UpstreamUrl);
+                        PluginLog.Redact(session.UpstreamUrl));
                 }
 
                 if (!string.IsNullOrWhiteSpace(session.TokenRenewalUrl))
@@ -313,16 +380,25 @@ public class SessionManagerService : BackgroundService
                                 RedirectChain = old.RedirectChain,
                                 ResolverProxyKey = old.ResolverProxyKey
                             };
+                            session.AllowHostFromUrl(nextUrl);
                             session.IsInvalid = false;
                             session.LastTokenRenewedAt = DateTimeOffset.UtcNow;
                             InvalidatePlaylistCache(session);
                             _resolveFailures.TryRemove(session.UpstreamUrl, out _);
-                            _logger.LogDebug("[JellyTV] Token renewal succeeded for session {Id}, attempt={Attempt}, generator={Generator}", session.SessionId, attempt, renewalUrl);
+                            if (_logger.IsEnabled(LogLevel.Debug))
+                            {
+                                _logger.LogDebug("[JellyTV] Token renewal succeeded for session {Id}, attempt={Attempt}, generator={Generator}", session.SessionId, attempt, PluginLog.Redact(renewalUrl));
+                            }
+
                             return;
                         }
                         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
                         {
-                            _logger.LogDebug(ex, "[JellyTV] Token renewal attempt {Attempt}/3 failed for session {Id}", attempt, session.SessionId);
+                            if (_logger.IsEnabled(LogLevel.Debug))
+                            {
+                                _logger.LogDebug(ex, "[JellyTV] Token renewal attempt {Attempt}/3 failed for session {Id}", attempt, session.SessionId);
+                            }
+
                             if (attempt < 3)
                             {
                                 await Task.Delay(TimeSpan.FromMilliseconds(150 * Math.Pow(2, attempt - 1)), ct).ConfigureAwait(false);
@@ -334,6 +410,8 @@ public class SessionManagerService : BackgroundService
                 _logger.LogWarning("[JellyTV] Direct token renewal exhausted for session {Id}; re-resolving origin", session.SessionId);
                 var resolved = await _resolver.ResolveAsync(session.UpstreamUrl, ct).ConfigureAwait(false);
                 session.LastResolved = resolved;
+                session.AllowHostFromUrl(resolved.FinalUrl);
+                session.AllowHostFromUrl(resolved.BaseUrl);
                 session.TokenRenewalUrl = resolved.TokenGeneratorHopUrl;
                 session.IsInvalid = false;
                 session.LastTokenRenewedAt = DateTimeOffset.UtcNow;
@@ -471,14 +549,77 @@ public class SessionManagerService : BackgroundService
     {
         _logger.LogInformation("[JellyTV] Session manager background service started.");
 
+        var tick = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
-            await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken).ConfigureAwait(false);
+            await Task.Delay(PollTick, stoppingToken).ConfigureAwait(false);
 
-            await ProcessSessionsAsync().ConfigureAwait(false);
+            PollActiveSessions(stoppingToken);
+
+            if (++tick % CleanupEveryTicks == 0)
+            {
+                await ProcessSessionsAsync().ConfigureAwait(false);
+            }
         }
 
         _logger.LogInformation("[JellyTV] Session manager background service stopped.");
+    }
+
+    /// <summary>
+    /// Keeps every relayed channel that has viewers fresh from a single place: one playlist refresh,
+    /// one token renewal and one set of segment downloads per channel, whether it has 1 or 1,000
+    /// viewers. Viewers only ever read the result from memory, so they can never burn tokens.
+    /// </summary>
+    private void PollActiveSessions(CancellationToken stoppingToken)
+    {
+        var hls = Plugin.Instance?.HlsRewriter;
+        if (hls is null)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var session in _sessions.Values)
+        {
+            // Solo los tokens efímeros necesitan que alguien renueve y descargue por adelantado; el resto
+            // (FAST, directo, token de sesión) se sirve a demanda sin tocar al proveedor de más.
+            if (session.ChannelType != ChannelEntry.TokenizedType
+                || session.SessionToken
+                || session.LastResolved is not { IsHls: true }
+                || session.IsInvalid
+                || now - session.LastAccessedAt > ViewerIdleTimeout
+                || !session.TryBeginPoll())
+            {
+                continue;
+            }
+
+            _ = PollSessionAsync(hls, session, stoppingToken);
+        }
+    }
+
+    private async Task PollSessionAsync(HlsRewriterService hls, StreamSession session, CancellationToken ct)
+    {
+        try
+        {
+            // FetchAndRewritePlaylistAsync respeta el TTL del playlist: llamarla en cada tick solo
+            // toca al proveedor cuando el playlist realmente caducó, y dispara el prefetch.
+            await hls.FetchAndRewritePlaylistAsync(session, "/JellyTV", ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Apagado del servidor.
+        }
+        catch (Exception ex)
+        {
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogDebug(ex, "[JellyTV] Background refresh failed for session {Id}", session.SessionId);
+            }
+        }
+        finally
+        {
+            session.EndPoll();
+        }
     }
 
     private Task ProcessSessionsAsync()
@@ -489,12 +630,21 @@ public class SessionManagerService : BackgroundService
         {
             var session = kvp.Value;
 
+            // Una sesión sin espectadores no retiene memoria: la caché de segmentos se libera al minuto.
+            if (now - session.LastAccessedAt > TimeSpan.FromSeconds(60))
+            {
+                session.SegmentCache.Clear();
+            }
+
             // Remove stale sessions (no one has accessed them in SessionTimeout).
             if (now - session.LastAccessedAt > SessionTimeout)
             {
-                _sessions.TryRemove(kvp.Key, out _);
-                _sessionsById.TryRemove(session.SessionId, out _);
-                _logger.LogInformation("[JellyTV] Cleaned up idle session {Id}", session.SessionId);
+                _sessions.TryRemove(kvp);
+                _sessionsById.TryRemove(new KeyValuePair<string, StreamSession>(session.SessionId, session));
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    _logger.LogInformation("[JellyTV] Cleaned up idle session {Id}", session.SessionId);
+                }
             }
 
             // NOTE: Token renewal is handled on-demand in two places:

@@ -26,6 +26,7 @@ public class ChannelHealthCheckService
     private const int CACHETTLMINUTES = 30;
     private const int MAXBYTESTODOWNLOAD = 5_000_000; // 5 MB max per fallback check
     private const int MINBYTESFORSUCCESS = 200_000;   // 200 KB minimum to consider "alive"
+    private const int QuickCheckTimeoutSeconds = 20;
     private const int RESOLVETIMEOUTSECONDS = 20;
     private const int REQUESTTIMEOUTSECONDS = 30;
     private const int FFMPEGTIMEOUTSECONDS = 18;
@@ -36,6 +37,7 @@ public class ChannelHealthCheckService
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<ChannelHealthCheckService> _logger;
+    private readonly UpstreamClientService _upstream;
     private readonly SessionManagerService _sessionManager;
     private readonly IApplicationPaths _applicationPaths;
 
@@ -45,15 +47,25 @@ public class ChannelHealthCheckService
     private string? _ffmpegPath;
     private DateTimeOffset _lastFfmpegCheck = DateTimeOffset.MinValue;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ChannelHealthCheckService"/> class.
+    /// </summary>
+    /// <param name="httpClientFactory">Factory used for upstream health probes.</param>
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="sessionManager">Session manager used to resolve tokenized channels.</param>
+    /// <param name="upstream">Gives the client that probes a source through its exit proxy.</param>
+    /// <param name="applicationPaths">Application paths used to locate the ffmpeg binary.</param>
     public ChannelHealthCheckService(
         IHttpClientFactory httpClientFactory,
         ILogger<ChannelHealthCheckService> logger,
         SessionManagerService sessionManager,
+        UpstreamClientService upstream,
         IApplicationPaths applicationPaths)
     {
         _httpClientFactory = httpClientFactory;
         _logger = logger;
         _sessionManager = sessionManager;
+        _upstream = upstream;
         _applicationPaths = applicationPaths;
     }
 
@@ -66,7 +78,9 @@ public class ChannelHealthCheckService
         string channelName,
         string channelUrl,
         int channelType = 0,
+        bool sessionToken = false,
         bool forceRefresh = false,
+        string? exitCountry = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(channelUrl))
@@ -95,20 +109,72 @@ public class ChannelHealthCheckService
         // Direct (non-token) streams: quick HTTP check, no session resolution.
         if (channelType is ChannelEntry.DirectType or ChannelEntry.FastType)
         {
-            var quick = await QuickHttpCheckAsync(channelName, channelUrl, ct).ConfigureAwait(false);
+            var quick = await QuickCheckWithRetryAsync(channelName, channelUrl, exitCountry, ct).ConfigureAwait(false);
             _healthCache[channelUrl] = (quick, DateTimeOffset.UtcNow);
             return quick;
         }
 
-        var result = await PerformRealHealthCheckAsync(channelName, channelUrl, channelType, ct).ConfigureAwait(false);
+        // Token de sesión (dura horas): se comprueba con el mismo token compartido que reciben los clientes,
+        // sin crear sesión de relay ni gastar otro token del proveedor.
+        if (ChannelEntry.IsTokenizedType(channelType) && sessionToken)
+        {
+            return await CheckSessionTokenSourceAsync(channelName, channelUrl, channelType, ct).ConfigureAwait(false);
+        }
+
+        var result = await PerformRealHealthCheckAsync(channelName, channelUrl, channelType, sessionToken, ct).ConfigureAwait(false);
         _healthCache[channelUrl] = (result, DateTimeOffset.UtcNow);
         return result;
     }
 
     /// <summary>
+    /// Checks a session-token source with the shared token clients receive, without a relay session or
+    /// another provider token. Also used by the editor before saving a channel.
+    /// </summary>
+    /// <param name="channelName">Channel name, for the result.</param>
+    /// <param name="channelUrl">Gateway URL of the source.</param>
+    /// <param name="channelType">Source type.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The health of the source.</returns>
+    public async Task<ChannelHealthStatus> CheckSessionTokenSourceAsync(string channelName, string channelUrl, int channelType, CancellationToken ct = default)
+    {
+        var source = new ChannelSource { Url = channelUrl, Type = channelType, SessionToken = true };
+        var finalUrl = await SessionTokenDirectCache.TryGetDirectUrlAsync(source, ct).ConfigureAwait(false);
+        var status = finalUrl is null
+            ? new ChannelHealthStatus
+            {
+                ChannelName = channelName,
+                ChannelUrl = channelUrl,
+                HttpStatus = 0,
+                CheckedAt = DateTimeOffset.UtcNow,
+                ErrorMessage = "No se pudo resolver el token de sesión"
+            }
+            : await QuickCheckWithRetryAsync(channelName, finalUrl, null, ct).ConfigureAwait(false);
+        status.ChannelUrl = channelUrl;
+        _healthCache[channelUrl] = (status, DateTimeOffset.UtcNow);
+        return status;
+    }
+
+    /// <summary>
+    /// A channel is not declared dead for one slow answer: timeouts, network errors, 429 and 5xx are
+    /// retried once after a short pause (many checks run at the same time and providers hiccup).
+    /// </summary>
+    private async Task<ChannelHealthStatus> QuickCheckWithRetryAsync(string channelName, string channelUrl, string? exitCountry, CancellationToken ct)
+    {
+        var result = await QuickHttpCheckAsync(channelName, channelUrl, exitCountry, ct).ConfigureAwait(false);
+        var transient = !result.IsAlive && (result.HttpStatus == 0 || result.HttpStatus == 429 || result.HttpStatus >= 500);
+        if (!transient)
+        {
+            return result;
+        }
+
+        await Task.Delay(TimeSpan.FromSeconds(6), ct).ConfigureAwait(false);
+        return await QuickHttpCheckAsync(channelName, channelUrl, exitCountry, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Quick HTTP GET check for direct streams. Alive = URL responds 2xx within timeout.
     /// </summary>
-    private async Task<ChannelHealthStatus> QuickHttpCheckAsync(string channelName, string channelUrl, CancellationToken ct)
+    private async Task<ChannelHealthStatus> QuickHttpCheckAsync(string channelName, string channelUrl, string? exitCountry, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
         var result = new ChannelHealthStatus
@@ -122,9 +188,11 @@ public class ChannelHealthCheckService
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(10));
+            cts.CancelAfter(TimeSpan.FromSeconds(QuickCheckTimeoutSeconds));
 
-            var client = _httpClientFactory.CreateClient("JellyTV");
+            // Una fuente con salida por país se comprueba por el mismo proxy con el que se reproduce: desde aquí,
+            // directo, un canal geobloqueado aparecería caído aunque funcione.
+            var client = UpstreamClientService.RequiresExit(exitCountry) ? _upstream.For(exitCountry, channelUrl) : _httpClientFactory.CreateClient("JellyTV");
             using var request = new HttpRequestMessage(HttpMethod.Get, channelUrl);
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
 
@@ -137,11 +205,11 @@ public class ChannelHealthCheckService
         }
         catch (OperationCanceledException)
         {
-            result.ErrorMessage = "Timeout (10s)";
+            result.ErrorMessage = $"Timeout ({QuickCheckTimeoutSeconds}s)";
         }
         catch (Exception ex)
         {
-            result.ErrorMessage = ex.Message;
+            result.ErrorMessage = ex.InnerException is { } inner && ex is HttpRequestException ? $"{ex.Message} ({inner.Message})" : ex.Message;
         }
 
         sw.Stop();
@@ -149,6 +217,12 @@ public class ChannelHealthCheckService
         return result;
     }
 
+    /// <summary>
+    /// Tries to read the cached health status for a channel URL.
+    /// </summary>
+    /// <param name="channelUrl">Channel URL used as cache key.</param>
+    /// <param name="status">Receives the cached status when found.</param>
+    /// <returns><c>true</c> when a cached status exists.</returns>
     public bool TryGetCachedChannelStatus(string channelUrl, out ChannelHealthStatus status)
     {
         status = default!;
@@ -179,7 +253,7 @@ public class ChannelHealthCheckService
     /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
     public async Task<List<ChannelHealthStatus>> CheckSourceChannelsAsync(
         string sourceId,
-        List<(string Name, string Url, int Type)> channels,
+        List<(string Name, string Url, int Type, bool SessionToken, string? ExitCountry)> channels,
         bool forceRefresh = false,
         CancellationToken ct = default)
     {
@@ -200,7 +274,8 @@ public class ChannelHealthCheckService
                 await semaphore.WaitAsync(ct).ConfigureAwait(false);
                 try
                 {
-                    var result = await CheckChannelAsync(ch.Name, ch.Url, ch.Type, forceRefresh, ct).ConfigureAwait(false);
+                    var result = TryAssumeAliveFromActiveSession(ch.Name, ch.Url, ch.Type)
+                        ?? await CheckChannelAsync(ch.Name, ch.Url, ch.Type, ch.SessionToken, forceRefresh, ch.ExitCountry, ct).ConfigureAwait(false);
                     lock (results)
                     {
                         results.Add(result);
@@ -227,6 +302,37 @@ public class ChannelHealthCheckService
     }
 
     /// <summary>
+    /// A tokenized channel somebody is watching right now is alive by definition. Probing it would
+    /// mint another token and, on providers that allow one per account, cut the viewer off.
+    /// </summary>
+    private ChannelHealthStatus? TryAssumeAliveFromActiveSession(string name, string url, int type)
+    {
+        if (!ChannelEntry.IsTokenizedType(type))
+        {
+            return null;
+        }
+
+        var watching = _sessionManager.GetAllSessions().Any(sess =>
+            string.Equals(sess.UpstreamUrl, url, StringComparison.OrdinalIgnoreCase)
+            && DateTimeOffset.UtcNow - sess.LastAccessedAt < TimeSpan.FromMinutes(2)
+            && !sess.IsInvalid);
+        if (!watching)
+        {
+            return null;
+        }
+
+        return new ChannelHealthStatus
+        {
+            ChannelName = name,
+            ChannelUrl = url,
+            HttpStatus = 200,
+            BytesDownloaded = 200_000,
+            CheckedAt = DateTimeOffset.UtcNow,
+            StreamType = "session"
+        };
+    }
+
+    /// <summary>
     /// Checks every enabled source of the given channels and applies the results to each source's
     /// health. Channels with no live source are auto-disabled; a channel that was auto-disabled is
     /// re-enabled as soon as any of its sources comes back online. Mutates the passed channel list.
@@ -241,8 +347,8 @@ public class ChannelHealthCheckService
         // Los canales AutoDisabled (caídos) se re-chequean SIN caché en cada corrida para detectar
         // el regreso cuanto antes; los habilitados respetan la caché (30 min) para no martirizar
         // los upstreams.
-        var toForce = new List<(string Name, string Url, int Type)>();
-        var toCache = new List<(string Name, string Url, int Type)>();
+        var toForce = new List<(string Name, string Url, int Type, bool SessionToken, string? ExitCountry)>();
+        var toCache = new List<(string Name, string Url, int Type, bool SessionToken, string? ExitCountry)>();
         foreach (var ch in candidates)
         {
             ch.EnsureMigratedSources();
@@ -251,7 +357,7 @@ public class ChannelHealthCheckService
             {
                 if (s.IsEnabled && !string.IsNullOrWhiteSpace(s.Url))
                 {
-                    target.Add((ch.Name, s.Url, s.Type));
+                    target.Add((ch.Name, s.Url, s.Type, s.SessionToken, s.ExitCountry));
                 }
             }
         }
@@ -310,7 +416,7 @@ public class ChannelHealthCheckService
 
             ch.LastCheckedAt = lastChecked;
             ch.LastCheckError = lastError;
-            ch.LastCheckAlive = enabledSources.Any(s => s.IsAlive == true);
+            ch.LastCheckAlive = enabledSources.Any(s => s.IsAlive == true) ? true : enabledSources.Any(s => s.IsAlive == false) ? false : null;
 
             if (anyAlive)
             {
@@ -333,6 +439,7 @@ public class ChannelHealthCheckService
         }
 
         PluginLog.Info($"[HEALTH] {label}: {channelsAlive} vivos / {channelsDead} caidos (fuentes: {sourcesAlive}/{sourcesChecked})");
+        Plugin.Instance?.ChannelCatalog?.RecordHealth(candidates);
         return (channelsAlive, channelsDead, sourcesChecked, sourcesAlive);
     }
 
@@ -344,6 +451,7 @@ public class ChannelHealthCheckService
         string channelName,
         string channelUrl,
         int channelType,
+        bool sessionToken,
         CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
@@ -361,7 +469,7 @@ public class ChannelHealthCheckService
             resolveCts.CancelAfter(TimeSpan.FromSeconds(RESOLVETIMEOUTSECONDS));
 
             // Get or create session for this channel (handles token renewal)
-            var session = await _sessionManager.GetOrCreateSessionAsync(channelUrl, channelType, resolveCts.Token).ConfigureAwait(false);
+            var session = await _sessionManager.GetOrCreateSessionAsync(channelUrl, channelType, sessionToken, null, resolveCts.Token).ConfigureAwait(false);
             if (session?.LastResolved is null)
             {
                 result.HttpStatus = 0;
@@ -697,6 +805,7 @@ public class ChannelHealthCheckService
                 // Master playlist: pick best variant first (same strategy as previous broadcast path).
                 if (playlistContent.Contains("#EXT-X-STREAM-INF", StringComparison.Ordinal))
                 {
+                    SourceCodecs.RecordFromMaster(session.UpstreamUrl, playlistContent);
                     var variantUrl = ParseBestVariantUrl(playlistContent, playlistBaseUrl);
                     if (!string.IsNullOrWhiteSpace(variantUrl))
                     {

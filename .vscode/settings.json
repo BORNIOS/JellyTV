@@ -1,5 +1,5 @@
 {
-  "jellyfinPluginDir": "C:\\Users\\JorgeChávezBornios\\AppData\\Local\\jellyfin\\plugins\\JellyTV_1.0.0",
-  "jellyfinDir": "D:\\jellyfin-portable",
-  "jellyfinDataDir": "C:\\Users\\JorgeChávezBornios\\AppData\\Local\\jellyfin"
+  "jellyfinPluginDir": "C:\path\to\jellyfin\data\plugins\JellyTV_1.0.0",
+  "jellyfinDir": "C:\path\to\jellyfin",
+  "jellyfinDataDir": "C:\path\to\jellyfin\data"
 }

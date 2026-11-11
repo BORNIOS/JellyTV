@@ -2,6 +2,9 @@ using System;
 
 namespace Jellyfin.Plugin.JellyTV.Models;
 
+/// <summary>
+/// XMLTV guide source configured in the plugin.
+/// </summary>
 public class EpgSource
 {
     /// <summary>Gets or sets unique identifier for this EPG source.</summary>

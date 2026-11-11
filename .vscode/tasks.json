@@ -22,7 +22,7 @@
     },
     {
       "label": "build",
-      "detail": "dotnet publish Release → bin/Release/net9.0/publish/",
+      "detail": "dotnet publish Release → bin/Release/net10.0/publish/",
       "command": "dotnet",
       "type": "shell",
       "args": [
@@ -53,7 +53,7 @@
           }
         }
       },
-      "command": "Stop-Process -Name 'jellyfin' -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1; Remove-Item -Force -Path '${config:jellyfinPluginDir}/JellyTV.dll' -ErrorAction SilentlyContinue; Copy-Item -Force -Path '${workspaceFolder}/Jellyfin.Plugin.JellyTV/bin/Release/net9.0/Jellyfin.Plugin.JellyTV.dll' -Destination '${config:jellyfinPluginDir}/Jellyfin.Plugin.JellyTV.dll'",
+      "command": "Stop-Process -Name 'jellyfin' -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1; Remove-Item -Force -Path '${config:jellyfinPluginDir}/JellyTV.dll' -ErrorAction SilentlyContinue; Copy-Item -Force -Path '${workspaceFolder}/Jellyfin.Plugin.JellyTV/bin/Release/net10.0/Jellyfin.Plugin.JellyTV.dll' -Destination '${config:jellyfinPluginDir}/Jellyfin.Plugin.JellyTV.dll'",
       "presentation": {
         "reveal": "silent"
       }

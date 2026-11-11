@@ -3,6 +3,9 @@ using System.Collections.Concurrent;
 
 namespace Jellyfin.Plugin.JellyTV.Services.Tmdb;
 
+/// <summary>
+/// In-memory negative cache for titles without a TMDB match.
+/// </summary>
 public sealed class NegativeCacheService : INegativeCacheService
 {
     private readonly ConcurrentDictionary<string, NegativeCacheEntry> _store = new(StringComparer.Ordinal);
@@ -23,6 +26,9 @@ public sealed class NegativeCacheService : INegativeCacheService
 
         return true;
     }
+
+    /// <summary>Forgets every title that was remembered as "no match".</summary>
+    public void Clear() => _store.Clear();
 
     /// <inheritdoc/>
     public void MarkNoMatch(string normalizedTitle, DateTimeOffset now, TimeSpan ttl)

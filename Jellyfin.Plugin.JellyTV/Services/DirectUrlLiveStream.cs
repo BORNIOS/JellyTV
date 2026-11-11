@@ -15,6 +15,11 @@ public sealed class DirectUrlLiveStream : ILiveStream, IDisposable
 {
     private readonly MediaSourceInfo _mediaSource;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DirectUrlLiveStream"/> class.
+    /// </summary>
+    /// <param name="mediaSource">Media source handed to Jellyfin.</param>
+    /// <param name="streamId">Original stream identifier.</param>
     public DirectUrlLiveStream(MediaSourceInfo mediaSource, string streamId)
     {
         _mediaSource = mediaSource;

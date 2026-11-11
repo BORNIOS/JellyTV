@@ -54,6 +54,25 @@ internal static class LocalEpgReader
         }
     }
 
+    /// <summary>
+    /// Resume la programación que la guía local tiene de un canal (para el panel de cobertura).
+    /// </summary>
+    /// <param name="key">Clave de guía del canal.</param>
+    /// <returns>Cantidad de programas y rango que cubren.</returns>
+    internal static EpgCoverage GetCoverage(string key)
+    {
+        EnsureLoaded();
+        lock (Gate)
+        {
+            if (!ProgrammesByChannel.TryGetValue(key, out var all) || all.Count == 0)
+            {
+                return new EpgCoverage(0, null, null);
+            }
+
+            return new EpgCoverage(all.Count, all.Min(static p => p.StartUtc), all.Max(static p => p.EndUtc));
+        }
+    }
+
     private static void EnsureLoaded()
     {
         var path = Plugin.Instance?.EpgFilter.EpgFilePath;
@@ -193,18 +212,16 @@ internal static class LocalEpgReader
             .Select(c => c.Value.Trim())
             .Where(c => c.Length > 0)
             .ToList();
-        var icon = (string?)element.Element("icon")?.Attribute("src");
+        var (poster, backdrop) = PickImages(element);
         var rating = (string?)element.Element("rating")?.Value;
         var description = element.Elements("desc").Select(d => d.Value.Trim()).FirstOrDefault(d => d.Length > 0);
 
-        return new LocalProgramme(channel, start, stop, title, description, categories, icon, rating);
+        return new LocalProgramme(channel, start, stop, title, description, categories, poster, backdrop, rating);
     }
 
     /// <summary>
-    /// Convierte un timestamp XMLTV a UTC. Si hay zona configurada, se interpreta la hora de
-    /// pared (primeros 14 dígitos) en esa zona (ignora el offset declarado, que muchos feeds
-    /// escriben como +0000 aunque sean hora local). Sin zona, se respeta el offset declarado y
-    /// un valor sin offset se asume UTC.
+    /// Convierte un timestamp XMLTV a UTC respetando el offset declarado. Un valor sin offset se
+    /// interpreta como hora de pared en la zona configurada o, sin zona, como UTC.
     /// </summary>
     private static bool TryParseTime(string? text, TimeZoneInfo? zone, out DateTime utc)
     {
@@ -215,6 +232,24 @@ internal static class LocalEpgReader
         }
 
         var trimmed = text.Trim();
+
+        // La guía la escribe el propio plugin con el offset real de cada programa: ese offset manda. Reinterpretar la
+        // hora de pared en la zona configurada desplazaba toda la programación (p. ej. +7 h con America/Hermosillo).
+        if (trimmed.Length >= WallFormat.Length + 5
+            && DateTime.TryParseExact(trimmed[..WallFormat.Length], WallFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var declaredWall))
+        {
+            var tail = trimmed[WallFormat.Length..].Trim();
+            if (tail.Length == 5
+                && (tail[0] == '+' || tail[0] == '-')
+                && int.TryParse(tail.AsSpan(1, 2), NumberStyles.None, CultureInfo.InvariantCulture, out var hours)
+                && int.TryParse(tail.AsSpan(3, 2), NumberStyles.None, CultureInfo.InvariantCulture, out var minutes))
+            {
+                var offset = TimeSpan.FromMinutes((hours * 60) + minutes);
+                utc = DateTime.SpecifyKind(declaredWall - (tail[0] == '-' ? -offset : offset), DateTimeKind.Utc);
+                return true;
+            }
+        }
+
         if (zone is not null)
         {
             if (trimmed.Length >= WallFormat.Length
@@ -242,6 +277,40 @@ internal static class LocalEpgReader
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Reparte los <c>&lt;icon&gt;</c> de un programa entre póster (vertical o cuadrada) y fondo (apaisada), según el
+    /// ancho y el alto declarados. Una imagen sin dimensiones se toma por póster, que es lo que Jellyfin espera como
+    /// imagen principal.
+    /// </summary>
+    private static (string? Poster, string? Backdrop) PickImages(XElement element)
+    {
+        string? poster = null;
+        string? backdrop = null;
+        foreach (var icon in element.Elements("icon"))
+        {
+            var src = (string?)icon.Attribute("src");
+            if (string.IsNullOrWhiteSpace(src))
+            {
+                continue;
+            }
+
+            int w = 0, h = 0;
+            var hasSize = int.TryParse((string?)icon.Attribute("width"), NumberStyles.None, CultureInfo.InvariantCulture, out w)
+                && int.TryParse((string?)icon.Attribute("height"), NumberStyles.None, CultureInfo.InvariantCulture, out h)
+                && w > 0 && h > 0;
+            if (hasSize && w >= h * 1.2)
+            {
+                backdrop ??= src;
+            }
+            else
+            {
+                poster ??= src;
+            }
+        }
+
+        return (poster, backdrop);
     }
 
     private static string ExtractTitle(XElement element)

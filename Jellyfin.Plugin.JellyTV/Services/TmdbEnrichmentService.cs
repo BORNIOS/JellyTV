@@ -53,6 +53,7 @@ public sealed class TmdbEnrichmentService
     private readonly Tmdb.MatchEvaluator _matchEvaluator;
     private readonly NegativeCacheService _negativeCache;
     private readonly TmdbMetadataMapper _metadataMapper;
+    private readonly FallbackMetadataService _fallback;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TmdbEnrichmentService"/> class.
@@ -70,7 +71,13 @@ public sealed class TmdbEnrichmentService
         _matchEvaluator = new JellyTV.Services.Tmdb.MatchEvaluator(_normalizer);
         _negativeCache = new NegativeCacheService();
         _metadataMapper = new TmdbMetadataMapper();
+        _fallback = new FallbackMetadataService(httpClientFactory, logger, _normalizer);
     }
+
+    /// <summary>
+    /// Forgets the titles remembered as "no match", so the next run looks every title up again.
+    /// </summary>
+    internal void ClearCaches() => _negativeCache.Clear();
 
     /// <summary>
     /// Creates a run-scoped context that holds shared state (rate limiter, memory cache,
@@ -127,6 +134,10 @@ public sealed class TmdbEnrichmentService
                 continue;
             }
 
+            // El mismo título puede ser una serie en un canal y una película en otro: la clave incluye lo que la
+            // fuente dice del tipo y del año para que no compartan resultado.
+            normalized = string.Concat(normalized, "|", EnrichmentGate.ExpectedMediaType(rec.Data) ?? "-", "|", rec.Data.Year?.ToString(CultureInfo.InvariantCulture) ?? "-", "|", rec.Country ?? "-");
+
             if (!groups.TryGetValue(normalized, out var list))
             {
                 list = new List<XmlProgrammeRecord>();
@@ -143,7 +154,7 @@ public sealed class TmdbEnrichmentService
         }
 
         int enrichedCount = 0, skippedCount = 0, memoryCacheHitCount = 0;
-        int negativeCacheSkipCount = 0, noMatchCount = 0, errorCount = 0;
+        int negativeCacheSkipCount = 0, noMatchCount = 0, errorCount = 0, fallbackCount = 0;
 
         await Parallel.ForEachAsync(
             groups,
@@ -152,7 +163,7 @@ public sealed class TmdbEnrichmentService
             {
                 var normalizedTitle = kv.Key;
                 var recList = kv.Value;
-                var item = ToItem(recList[0].Data);
+                var item = ToItem(recList[0].Data, recList[0]);
                 try
                 {
                     if (ShouldSkip(item.Title))
@@ -183,6 +194,21 @@ public sealed class TmdbEnrichmentService
                         else
                         {
                             meta = await LookupTmdbAsync(item, ctx.TmdbApiKey, ctx.TmdbClient, token).ConfigureAwait(false);
+
+                            // TMDB no dio un resultado confiable: se prueba con lo que Jellyfin ya sabe buscar y con TVmaze.
+                            if (!meta.IsMatch)
+                            {
+                                meta = await _fallback.LookupAsync(item, token).ConfigureAwait(false);
+                                if (meta.IsMatch)
+                                {
+                                    Interlocked.Increment(ref fallbackCount);
+                                    if (_logger.IsEnabled(LogLevel.Debug))
+                                    {
+                                        _logger.LogDebug("[JellyTV] Enrich '{Title}' resuelto por {Source}", item.Title, meta.SourceName);
+                                    }
+                                }
+                            }
+
                             ctx.MemoryCache[normalizedTitle] = meta;
                             if (!meta.IsMatch)
                             {
@@ -221,17 +247,21 @@ public sealed class TmdbEnrichmentService
         stats.NegativeCacheSkips = negativeCacheSkipCount;
         stats.NoMatch = noMatchCount;
         stats.Errors = errorCount;
+        stats.FallbackMatches = fallbackCount;
         stats.TmdbRequests = ctx.TmdbClient.Metrics.Requests;
         stats.Retries = ctx.TmdbClient.Metrics.Retries;
 
-        _logger.LogInformation(
-            "[JellyTV] TmdbEnrich done: programmes={Programmes} unique={Unique} enriched={Enriched} errors={Errors} tmdbReq={TmdbReq} retries={Retries}",
-            stats.ProgrammesInput,
-            stats.UniqueAfterDedup,
-            stats.Enriched,
-            stats.Errors,
-            stats.TmdbRequests,
-            stats.Retries);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation(
+                "[JellyTV] TmdbEnrich done: programmes={Programmes} unique={Unique} enriched={Enriched} errors={Errors} tmdbReq={TmdbReq} retries={Retries}",
+                stats.ProgrammesInput,
+                stats.UniqueAfterDedup,
+                stats.Enriched,
+                stats.Errors,
+                stats.TmdbRequests,
+                stats.Retries);
+        }
 
         return stats;
     }
@@ -300,11 +330,34 @@ public sealed class TmdbEnrichmentService
             && meta.IsMatch
             && !EpgClassifier.LooksLikeLiveShow(data.BestTitle, data.Description))
         {
-            var imageUrl = BuildImageUrl(meta.BackdropPath, "w1280") ?? BuildImageUrl(meta.PosterPath, "w500");
-            if (!string.IsNullOrEmpty(imageUrl))
+            // Se guardan las dos formas de imagen y Jellyfin elige: el póster (vertical) para la ficha y el fondo (horizontal)
+            // para las filas apaisadas. Las dimensiones permiten distinguirlas al leer la guía.
+            var poster = BuildImageUrl(meta.PosterPath, "w500");
+            var backdrop = BuildImageUrl(meta.BackdropPath, "w1280");
+            if (!string.IsNullOrEmpty(meta.ImageUrl))
             {
                 programme.Elements("icon").Remove();
-                programme.Add(new XElement("icon", new XAttribute("src", imageUrl)));
+                programme.Add(new XElement("icon", new XAttribute("src", meta.ImageUrl)));
+                changed = true;
+            }
+            else if (poster is not null || backdrop is not null)
+            {
+                // Con las dos formas disponibles se reemplaza lo que trajera la fuente; con una sola se conserva el resto.
+                if (poster is not null && backdrop is not null)
+                {
+                    programme.Elements("icon").Remove();
+                }
+
+                if (poster is not null)
+                {
+                    programme.Add(new XElement("icon", new XAttribute("src", poster), new XAttribute("width", 500), new XAttribute("height", 750)));
+                }
+
+                if (backdrop is not null)
+                {
+                    programme.Add(new XElement("icon", new XAttribute("src", backdrop), new XAttribute("width", 1280), new XAttribute("height", 720)));
+                }
+
                 changed = true;
             }
 
@@ -417,9 +470,10 @@ public sealed class TmdbEnrichmentService
     /// Convierte los metadatos ricos de un programa en el item que consume el buscador TMDB.
     /// </summary>
     /// <param name="p">Metadatos del programa.</param>
+    /// <param name="record">Programa de la guía, con su país y lo que corroboran las demás fuentes.</param>
     /// <returns>Item de búsqueda.</returns>
-    private static UncachedProgrammeItem ToItem(EpgProgrammeData p)
-        => new(p.BestTitle, p.Description, p.Category, p.Year, p.FallbackTitle);
+    private static UncachedProgrammeItem ToItem(EpgProgrammeData p, XmlProgrammeRecord record)
+        => new(p.BestTitle, p.Description, p.Category, p.Year, p.FallbackTitle, EnrichmentGate.ExpectedMediaType(p), EnrichmentGate.Season(p), record.Country, record.Corroborated, record.AlternateTitles);
 
     private async Task<TmdbMetadata> LookupTmdbAsync(
         UncachedProgrammeItem item,
@@ -444,7 +498,14 @@ public sealed class TmdbEnrichmentService
                     continue;
                 }
 
-                var candidate = _matchEvaluator.SelectBest(item, results, PreferredOriginalLanguages);
+                // Antes de puntuar, fuera lo que la fuente descarta (tipo equivocado, año imposible).
+                var plausible = results.Where(r => EnrichmentGate.AcceptsCandidate(item, r)).ToList();
+                if (plausible.Count == 0)
+                {
+                    continue;
+                }
+
+                var candidate = _matchEvaluator.SelectBest(item, plausible, PreferredOriginalLanguages, item.ExpectedMediaType);
                 if (candidate == null)
                 {
                     continue;
@@ -460,7 +521,11 @@ public sealed class TmdbEnrichmentService
 
         if (best == null)
         {
-            _logger.LogDebug("[JellyTV] TmdbEnrich no match title='{Title}'", item.Title);
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogDebug("[JellyTV] TmdbEnrich no match title='{Title}'", item.Title);
+            }
+
             return TmdbMetadata.NoMatch;
         }
 
@@ -473,13 +538,28 @@ public sealed class TmdbEnrichmentService
         var detail = await client.GetDetailAsync(apiKey, mediaType, best.Candidate.Id, bestLanguage, ct).ConfigureAwait(false);
         var mapped = _metadataMapper.Map(best.Candidate, detail);
 
-        _logger.LogDebug(
-            "[JellyTV] TmdbEnrich matched title='{Title}' -> id={TmdbId} type={Type} score={Score:F3} ({Breakdown})",
-            item.Title,
-            mapped.TmdbId,
-            mapped.MediaType,
-            best.Score,
-            best.Breakdown);
+        var candidateTitle = best.Candidate.Title ?? best.Candidate.Name ?? string.Empty;
+        var exactTitle = string.Equals(_normalizer.NormalizeTitle(item.Title), _normalizer.NormalizeTitle(candidateTitle), StringComparison.Ordinal);
+        if (!EnrichmentGate.AcceptsMetadata(item, mapped, exactTitle, out var rejection))
+        {
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation("[JellyTV] TmdbEnrich descartado title='{Title}' -> id={TmdbId} type={Type}: {Reason}", item.Title, mapped.TmdbId, mapped.MediaType, rejection);
+            }
+
+            return TmdbMetadata.NoMatch;
+        }
+
+        if (_logger.IsEnabled(LogLevel.Debug))
+        {
+            _logger.LogDebug(
+                "[JellyTV] TmdbEnrich matched title='{Title}' -> id={TmdbId} type={Type} score={Score:F3} ({Breakdown})",
+                item.Title,
+                mapped.TmdbId,
+                mapped.MediaType,
+                best.Score,
+                best.Breakdown);
+        }
 
         return mapped;
     }
@@ -535,6 +615,13 @@ public sealed class TmdbEnrichmentService
             {
                 Add($"{title} {year.Value}");
             }
+        }
+
+        // Los títulos con los que otras fuentes llaman a la misma emisión son consultas extra (idioma o forma distintos).
+        foreach (var alternate in item.AlternateTitles ?? Array.Empty<string>())
+        {
+            Add(alternate);
+            Add(_normalizer.NormalizeTitle(alternate));
         }
 
         // Título secundario (p. ej. español cuando el principal es inglés) como variante adicional.

@@ -16,7 +16,8 @@ internal sealed class LocalProgramme
         string title,
         string? description,
         IReadOnlyList<string> categories,
-        string? iconUrl,
+        string? posterUrl,
+        string? backdropUrl,
         string? rating)
     {
         Channel = channel;
@@ -25,7 +26,8 @@ internal sealed class LocalProgramme
         Title = title;
         Description = description;
         Categories = categories;
-        IconUrl = iconUrl;
+        PosterUrl = posterUrl;
+        BackdropUrl = backdropUrl;
         Rating = rating;
     }
 
@@ -47,8 +49,11 @@ internal sealed class LocalProgramme
     /// <summary>Gets categorías del programa (para clasificación y géneros).</summary>
     internal IReadOnlyList<string> Categories { get; }
 
-    /// <summary>Gets URL del icono/arte (backdrop o póster inyectado por TMDB).</summary>
-    internal string? IconUrl { get; }
+    /// <summary>Gets URL de la imagen vertical (póster), la que Jellyfin usa como imagen principal.</summary>
+    internal string? PosterUrl { get; }
+
+    /// <summary>Gets URL de la imagen horizontal (fondo), la que Jellyfin usa en las filas apaisadas.</summary>
+    internal string? BackdropUrl { get; }
 
     /// <summary>Gets rating oficial (p. ej. TV-14, AA), si existe.</summary>
     internal string? Rating { get; }

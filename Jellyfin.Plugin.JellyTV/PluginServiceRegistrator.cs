@@ -1,7 +1,10 @@
 using Jellyfin.Plugin.JellyTV.ScheduledTask;
+using Jellyfin.Plugin.JellyTV.Services;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Controller.Plugins;
 using MediaBrowser.Model.Tasks;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Jellyfin.Plugin.JellyTV;
@@ -22,10 +25,17 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<IScheduledTask, ChannelHealthCheckTask>();
         serviceCollection.AddSingleton<IScheduledTask, SourceSyncTask>();
 
-        // Ruta B (M3U Tuner nativo): los canales se entregan SOLO vía /JellyTV/tuner.m3u registrado
-        // como tuner M3U en Jellyfin. NO se registra JellyTVLiveTvService como ILiveTvService para
-        // evitar canales duplicados (nativo + tuner). La EPG se enlaza añadiendo
-        // {DataPath}/JellyTV/epg.xml como proveedor XMLTV (mapeo por tvg-id).
-        // serviceCollection.AddSingleton<ILiveTvService, JellyTVLiveTvService>();
+        // Ruta nativa: JellyTVLiveTvService se registra siempre, pero solo publica canales cuando
+        // LiveTvMode = "Native". En modo "M3u" devuelve una lista vacía, así que nunca duplica los
+        // canales del tuner M3U. La EPG nativa sale de GetProgramsAsync (epg.xml local).
+        serviceCollection.AddSingleton<ILiveTvService, JellyTVLiveTvService>();
+
+        // Jellyfin fuerza IsInterlaced=true en los canales de plugins y los perfiles de cliente lo
+        // rechazan: estos filtros devuelven DirectPlay cuando el perfil del cliente sí lo admite.
+        serviceCollection.Configure<MvcOptions>(options =>
+        {
+            options.Filters.Add<PlaybackInfoProfileCaptureFilter>();
+            options.Filters.Add<PlaybackInfoDirectFilter>();
+        });
     }
 }

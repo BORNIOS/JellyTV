@@ -12,20 +12,25 @@ public class PluginConfiguration : BasePluginConfiguration
     // interference with token renewal logic. See RedirectResolverService.
     // El default es un User-Agent de navegador (fuente única: Plugin.DefaultUserAgent).
     // Se edita en la UI; la lógica de fetch/entrega nunca lo hardcodea.
+
+    /// <summary>Gets or sets the User-Agent sent to IPTV providers.</summary>
     public string UserAgent { get; set; } = Plugin.DefaultUserAgent;
 
     /// <summary>
     /// Gets or sets URL base pública con la que la instancia de Jellyfin se alcanza a sí misma para
-    /// construir los Path de streaming (p. ej. "https://tv.midominio.com"). Plugin público: cada
+    /// construir los Path de streaming (p. ej. "https://tv.example.com"). Plugin público: cada
     /// instancia registra la suya; NUNCA se hardcodea un dominio concreto. Vacío = auto (host de la
     /// última petición al plugin y, como último recurso, localhost con aviso en log).
     /// </summary>
     public string PublicStreamingBaseUrl { get; set; } = string.Empty;
 
+    /// <summary>Gets or sets a value indicating whether detailed diagnostic logging is enabled.</summary>
     public bool VerboseLogging { get; set; } = false;
 
+    /// <summary>Gets or sets the comma-separated preferred audio languages.</summary>
     public string PreferredAudioLanguages { get; set; } = "es,spa,es-419";
 
+    /// <summary>Gets or sets the comma-separated preferred subtitle languages.</summary>
     public string PreferredSubtitleLanguages { get; set; } = "es,spa";
 
     // ── Channel management ────────────────────────────────────────────────
@@ -39,10 +44,13 @@ public class PluginConfiguration : BasePluginConfiguration
     public List<ProxyEntry> Proxies { get; set; } = new();
 
     /// <summary>
-    /// Gets or sets a value indicating whether keeps the optional diagnostic M3U endpoint available. Channels are exposed
-    /// through the JellyTV provider and do not require an external M3U tuner.
+    /// Gets or sets how channels reach Jellyfin Live TV:
+    /// <c>"Auto"</c> (default) publishes the plugin's own <c>ILiveTvService</c> unless an M3U tuner
+    /// already points to <c>/JellyTV/tuner.m3u</c>; <c>"Native"</c> always publishes it (channels and
+    /// guide, no playlist needed); <c>"M3u"</c> never publishes it, so only the registered M3U tuner
+    /// feeds Live TV. Use one route or the other to avoid duplicated channels.
     /// </summary>
-    public bool AutoRegisterTuner { get; set; } = true;
+    public string LiveTvMode { get; set; } = "Auto";
 
     // ── Scheduled tasks ───────────────────────────────────────────────────
 
@@ -96,4 +104,66 @@ public class PluginConfiguration : BasePluginConfiguration
     /// (p. ej. "America/Mexico_City"). Vacío/"UTC" = respetar el offset declarado.
     /// </summary>
     public string EpgTimezone { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the guide is also filled automatically: the channels identified in iptv-org
+    /// get the public XMLTV files of their country, and those no file covers use their GatoTV channel page.
+    /// </summary>
+    public bool AutoGuideEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets custom recipes (a JSON list) to read the schedule of HTML pages. Each recipe applies to one domain and
+    /// describes its rows with a regular expression; the built-in recipes are always available.
+    /// </summary>
+    public string? HtmlGuideRecipesJson { get; set; }
+
+    // ── Almacenamiento ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Gets or sets the storage backend: "Auto" (PostgreSQL when PG Provider is available, otherwise
+    /// JSON files), "Postgres" (PG Provider only, falling back to JSON) or "Json" (always local files).
+    /// </summary>
+    public string StorageBackend { get; set; } = "Auto";
+
+    /// <summary>
+    /// Gets or sets an alternative absolute folder for the JSON files. Empty keeps them under
+    /// <c>{DataPath}/JellyTV</c>. A relative path is ignored so data never lands next to the process.
+    /// </summary>
+    public string JsonDataPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the JSON snapshot is also written while PostgreSQL is the
+    /// active store. Disabled by default; PostgreSQL remains the only operational source when it works.
+    /// </summary>
+    public bool EnableJsonCourtesyBackup { get; set; }
+
+    // ── Seguridad ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Gets or sets the secret key required by anonymous relay endpoints
+    /// (playlists, streams and segments). Generated automatically when empty.
+    /// </summary>
+    public string RelayKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Creates a copy with every setting but without channels, proxies and EPG sources. Those
+    /// collections live in the database store; the XML file keeps only the settings.
+    /// </summary>
+    /// <returns>A new settings-only configuration.</returns>
+    public PluginConfiguration CloneSettingsOnly()
+    {
+        var copy = new PluginConfiguration();
+        foreach (var property in typeof(PluginConfiguration).GetProperties())
+        {
+            if (!property.CanRead || !property.CanWrite
+                || property.Name is nameof(Channels) or nameof(Proxies) or nameof(EpgSources))
+            {
+                continue;
+            }
+
+            property.SetValue(copy, property.GetValue(this));
+        }
+
+        return copy;
+    }
 }

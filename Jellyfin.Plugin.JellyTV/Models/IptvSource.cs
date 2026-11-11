@@ -2,6 +2,9 @@ using System;
 
 namespace Jellyfin.Plugin.JellyTV.Models;
 
+/// <summary>
+/// M3U playlist source configured in the plugin.
+/// </summary>
 public class IptvSource
 {
     /// <summary>Gets or sets unique identifier for this source.</summary>

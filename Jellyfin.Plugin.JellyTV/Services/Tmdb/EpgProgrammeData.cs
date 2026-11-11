@@ -25,6 +25,9 @@ internal sealed class EpgProgrammeData
     /// <summary>Gets year parsed from the first 4 digits of &lt;date&gt;.</summary>
     public int? Year { get; init; }
 
+    /// <summary>Gets the first &lt;episode-num&gt; value (for example <c>S1 E9</c>), if present.</summary>
+    public string? EpisodeNum { get; init; }
+
     /// <summary>Gets src attribute from &lt;icon&gt;, if present.</summary>
     public string? ExistingIconUrl { get; init; }
 
@@ -52,4 +55,19 @@ internal sealed class EpgProgrammeData
     public bool HasTmdbIcon =>
         !string.IsNullOrWhiteSpace(ExistingIconUrl)
         && ExistingIconUrl!.Contains("image.tmdb.org", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Returns a copy of this data without the icon, used when the icon URL of the source turned out to be dead.
+    /// </summary>
+    /// <returns>A copy with no icon.</returns>
+    internal EpgProgrammeData WithoutIcon() => new()
+    {
+        TitleEs = TitleEs,
+        TitleEn = TitleEn,
+        Description = Description,
+        Category = Category,
+        Year = Year,
+        EpisodeNum = EpisodeNum,
+        ExistingIconUrl = null,
+    };
 }

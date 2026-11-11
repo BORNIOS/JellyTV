@@ -5,6 +5,9 @@ using System.Threading.Tasks;
 
 namespace Jellyfin.Plugin.JellyTV.Services.Tmdb;
 
+/// <summary>
+/// Rate limiter that allows a fixed number of TMDB requests per sliding window.
+/// </summary>
 public sealed class SlidingWindowTmdbRateLimiter : ITmdbRateLimiter
 {
     private readonly object _gate = new();
@@ -13,6 +16,11 @@ public sealed class SlidingWindowTmdbRateLimiter : ITmdbRateLimiter
     private readonly TimeSpan _window;
     private int _waitEvents;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SlidingWindowTmdbRateLimiter"/> class.
+    /// </summary>
+    /// <param name="maxRequests">Maximum number of requests allowed per window.</param>
+    /// <param name="window">Sliding window duration; defaults to ten seconds.</param>
     public SlidingWindowTmdbRateLimiter(int maxRequests = 40, TimeSpan? window = null)
     {
         _maxRequests = maxRequests;

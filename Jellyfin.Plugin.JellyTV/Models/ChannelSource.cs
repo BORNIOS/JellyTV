@@ -32,6 +32,13 @@ public class ChannelSource
     /// <summary>Gets or sets a value indicating whether la fuente está habilitada (se usa en failover/health).</summary>
     public bool IsEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Gets or sets the country the stream must be fetched from (such as "US") for geoblocked sources. Empty means the
+    /// server fetches it directly. A source with an exit is always served through the relay, which downloads everything
+    /// through a proxy of that country.
+    /// </summary>
+    public string? ExitCountry { get; set; }
+
     /// <summary>Gets or sets last time this source was checked.</summary>
     public DateTimeOffset? LastCheckedAt { get; set; }
 

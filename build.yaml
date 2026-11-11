@@ -21,8 +21,8 @@ imageUrl: ""
 
 versions:
   - version: "1.0.0.0"
-    changelog: "Alineación al template oficial de Jellyfin; relay de entrega para Direct/FAST; tokens por sesión y efímeros; renovación reactiva."
-    targetAbi: "10.11.0.0"
+    changelog: "Compatibilidad con Jellyfin 12.1 (.NET 10): retarget a Jellyfin.Controller/Model 12.1.0, seguridad de endpoints y relay, y nueva interfaz."
+    targetAbi: "12.1.0.0"
     sourceUrl: ""
     checksum: ""
-    timestamp: "2026-04-21T00:00:00Z"
+    timestamp: "2026-10-18T00:00:00Z"

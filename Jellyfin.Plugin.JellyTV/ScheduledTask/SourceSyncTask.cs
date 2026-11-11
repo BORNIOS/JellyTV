@@ -19,6 +19,11 @@ public sealed class SourceSyncTask : IScheduledTask
     private readonly ILogger<SourceSyncTask> _logger;
     private readonly ITaskManager _taskManager;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SourceSyncTask"/> class.
+    /// </summary>
+    /// <param name="logger">Logger instance.</param>
+    /// <param name="taskManager">Jellyfin task manager used to queue guide refreshes.</param>
     public SourceSyncTask(
         ILogger<SourceSyncTask> logger,
         ITaskManager taskManager)
@@ -57,7 +62,11 @@ public sealed class SourceSyncTask : IScheduledTask
             return;
         }
 
-        _logger.LogInformation("[JellyTV] SourceSyncTask: processing {Count} channel(s).", sources.Count);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("[JellyTV] SourceSyncTask: processing {Count} channel(s).", sources.Count);
+        }
+
         progress.Report(0);
 
         // ── EPG local + enriquecimiento TMDB ────────────────────────────────
@@ -71,11 +80,14 @@ public sealed class SourceSyncTask : IScheduledTask
             {
                 var epgResult = await plugin.EpgFilter.SyncLocalGuideAsync(cancellationToken).ConfigureAwait(false);
 
-                _logger.LogInformation(
-                    "[JellyTV] SourceSyncTask: EPG sync done. success={Success}, sources={Sources}, programmes={Programmes}",
-                    epgResult.Success,
-                    epgResult.Sources.Count,
-                    epgResult.Sources.Sum(s => s.ProgrammesKept));
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    _logger.LogInformation(
+                        "[JellyTV] SourceSyncTask: EPG sync done. success={Success}, sources={Sources}, programmes={Programmes}",
+                        epgResult.Success,
+                        epgResult.Sources.Count,
+                        epgResult.Sources.Sum(s => s.ProgrammesKept));
+                }
 
                 synced = epgResult.Success;
             }

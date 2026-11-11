@@ -8,7 +8,10 @@ namespace Jellyfin.Plugin.JellyTV.Models;
 /// </summary>
 public class ChannelEntry
 {
+    /// <summary>Identifies a direct channel whose URL is served as-is by the plugin relay.</summary>
     public const int DirectType = 0;
+
+    /// <summary>Identifies a FAST channel whose URL is served as-is by the plugin relay.</summary>
     public const int FastType = 1;
 
     /// <summary>
@@ -52,7 +55,7 @@ public class ChannelEntry
 
     /// <summary>
     /// Gets or sets a value indicating whether token de sesión (checkbox en la UI): el gateway entrega un token para TODA la sesión
-    /// (p.ej. tvf90 embebe un m3u8 con token de varias horas). El plugin re-baja el MISMO
+    /// (p.ej. un gateway que embebe un m3u8 con token de varias horas). El plugin re-baja el MISMO
     /// playlist tokenizado y NO renueva proactivamente; solo renueva de forma reactiva
     /// (401/403 o al expirar). Si es false, el token se considera efímero y se renueva.
     /// </summary>
@@ -79,11 +82,26 @@ public class ChannelEntry
     /// <summary>Gets or sets uRL to the channel logo/icon.</summary>
     public string? LogoUrl { get; set; }
 
+    /// <summary>Gets or sets the external identity (TVMaze network, TMDB company, country, website).</summary>
+    public ChannelIdentity? Identity { get; set; }
+
     /// <summary>Gets or sets tvg-id for EPG matching.</summary>
     public string? TvgId { get; set; }
 
     /// <summary>Gets or sets tvg-name override for EPG matching.</summary>
     public string? TvgName { get; set; }
+
+    /// <summary>
+    /// Gets or sets the ISO 3166-1 alpha-2 code of the country the channel broadcasts from (for example MX, US, UY).
+    /// It helps pick the right guide when a channel appears in several sources and biases metadata searches.
+    /// </summary>
+    public string? Country { get; set; }
+
+    /// <summary>
+    /// Gets or sets an optional URL of the channel's own schedule (a JSON or XMLTV response). The tokens
+    /// <c>{date}</c> (dd-MM-yyyy) and <c>{date:format}</c> are replaced with each day to fetch.
+    /// </summary>
+    public string? EpgPageUrl { get; set; }
 
     /// <summary>Gets or sets category / group-title for the M3U output.</summary>
     public string? Category { get; set; }

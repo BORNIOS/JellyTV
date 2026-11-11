@@ -7,13 +7,16 @@ using System.Threading.Tasks;
 using Jellyfin.Plugin.JellyTV.Configuration;
 using Jellyfin.Plugin.JellyTV.Models;
 using Jellyfin.Plugin.JellyTV.Services;
+using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
+using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.LiveTv;
 using MediaBrowser.Model.MediaInfo;
+using Microsoft.AspNetCore.Http;
 
 namespace Jellyfin.Plugin.JellyTV;
 
@@ -23,21 +26,59 @@ namespace Jellyfin.Plugin.JellyTV;
 public sealed class JellyTVLiveTvService : ILiveTvService, ISupportsDirectStreamProvider
 {
     private readonly int _httpPort;
+    private readonly IServerConfigurationManager _configurationManager;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="JellyTVLiveTvService"/> class.
     /// </summary>
     /// <param name="applicationHost">Host de la aplicación Jellyfin (para conocer el puerto HTTP real).</param>
-    public JellyTVLiveTvService(IServerApplicationHost applicationHost)
+    /// <param name="configurationManager">Gestor de configuración del servidor (tuners registrados).</param>
+    /// <param name="httpContextAccessor">Acceso a la petición en curso, de donde sale el host con el que el cliente abrió Jellyfin.</param>
+    /// <param name="providerManager">Gestor de proveedores de metadatos de Jellyfin (para enriquecer la guía con lo que el servidor ya sabe buscar).</param>
+    public JellyTVLiveTvService(
+        IServerApplicationHost applicationHost,
+        IServerConfigurationManager configurationManager,
+        IHttpContextAccessor httpContextAccessor,
+        MediaBrowser.Controller.Providers.IProviderManager providerManager)
     {
-        // El Path del MediaSource debe ser alcanzable por el CLIENTE, no por el propio servidor:
-        // si apunta a localhost, cualquier cliente remoto recibe una URL rota → SocketTimeout →
-        // Jellyfin cae a transcode (bug conocido). Por eso la base se resuelve a la URL pública de
-        // la instancia (config → KnownBaseUrl → localhost solo como fallback de desarrollo).
+        Plugin.NativeProviders = providerManager;
+        _configurationManager = configurationManager;
+        _httpContextAccessor = httpContextAccessor;
+
+        // El Path del MediaSource debe ser alcanzable por el CLIENTE, no por el propio servidor. Cada
+        // petición lo calcula con el host con el que ese cliente abrió Jellyfin (localhost, LAN o el
+        // dominio público), así que la misma instancia sirve en todos los escenarios sin configuración.
         _httpPort = applicationHost.HttpPort;
     }
 
     private static PluginConfiguration Config => Plugin.Instance?.Configuration!;
+
+    /// <summary>
+    /// Gets a value indicating whether this service must publish channels. En modo "Auto" se publica
+    /// salvo que ya exista un tuner M3U apuntando al plugin, para no duplicar canales.
+    /// </summary>
+    private bool IsNativeMode
+    {
+        get
+        {
+            var mode = Plugin.Instance?.Configuration?.LiveTvMode;
+            if (string.Equals(mode, "Native", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (string.Equals(mode, "M3u", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            // Auto: siempre nativo. El tuner M3U estándar de Jellyfin marca como no reproducible
+            // en directo cualquier manifiesto .m3u8, así que mantener un tuner propio condena al
+            // transcode; se migra (se elimina) y los canales salen de este servicio.
+            return true;
+        }
+    }
 
     /// <inheritdoc/>
     public string Name => "JellyTV";
@@ -48,6 +89,14 @@ public sealed class JellyTVLiveTvService : ILiveTvService, ISupportsDirectStream
     /// <inheritdoc/>
     public Task<IEnumerable<ChannelInfo>> GetChannelsAsync(CancellationToken cancellationToken)
     {
+        if (!IsNativeMode)
+        {
+            // Modo "M3u": los canales llegan por /JellyTV/tuner.m3u. Publicar aquí además
+            // duplicaría cada canal en Live TV.
+            return Task.FromResult<IEnumerable<ChannelInfo>>(Array.Empty<ChannelInfo>());
+        }
+
+        RemoveOwnTuner();
         Plugin.NormalizeChannels();
 
         var list = Config.Channels
@@ -69,37 +118,71 @@ public sealed class JellyTVLiveTvService : ILiveTvService, ISupportsDirectStream
     /// <inheritdoc/>
     public Task<MediaSourceInfo> GetChannelStream(string channelId, string streamId, CancellationToken cancellationToken)
     {
-        var channel = GetChannel(channelId);
-        return Task.FromResult(BuildMediaSource(channel));
+        return BuildMediaSourceAsync(GetChannel(channelId), cancellationToken);
     }
 
     /// <inheritdoc/>
-    public Task<List<MediaSourceInfo>> GetChannelStreamMediaSources(string channelId, CancellationToken cancellationToken)
+    public async Task<List<MediaSourceInfo>> GetChannelStreamMediaSources(string channelId, CancellationToken cancellationToken)
     {
-        var channel = GetChannel(channelId);
-        return Task.FromResult(new List<MediaSourceInfo> { BuildMediaSource(channel) });
+        var source = await BuildMediaSourceAsync(GetChannel(channelId), cancellationToken).ConfigureAwait(false);
+        return new List<MediaSourceInfo> { source };
     }
 
     /// <inheritdoc/>
-    public Task<ILiveStream> GetChannelStreamWithDirectStreamProvider(
+    public async Task<ILiveStream> GetChannelStreamWithDirectStreamProvider(
         string channelId,
         string streamId,
         List<ILiveStream> currentLiveStreams,
         CancellationToken cancellationToken)
     {
         var channel = GetChannel(channelId);
-        PluginLog.Info($"[LiveTV] Direct stream provider selected for channel {channel.Id}: {channel.Url}");
-        return Task.FromResult<ILiveStream>(new DirectUrlLiveStream(BuildMediaSource(channel), streamId));
+        PluginLog.Info($"[LiveTV] Direct stream provider selected for channel {channel.Id}");
+        var source = await BuildMediaSourceAsync(channel, cancellationToken).ConfigureAwait(false);
+        return new DirectUrlLiveStream(source, streamId);
     }
 
     /// <summary>
-    /// Base URL pública con la que los clientes alcanzan a esta instancia para los streams.
-    /// Prioridad: config explícita (PublicStreamingBaseUrl) → KnownBaseUrl (host de la última
-    /// petición al plugin) → localhost (solo dev, con aviso en log). Plugin público: nunca se
-    /// hardcodea un dominio de una instancia concreta.
+    /// Elimina de la configuración de Live TV los tuners M3U que apuntan al propio plugin.
     /// </summary>
-    private static string ResolveStreamBase(int fallbackPort)
+    private void RemoveOwnTuner()
     {
+        try
+        {
+            var options = _configurationManager.GetConfiguration<LiveTvOptions>("livetv");
+            var own = options.TunerHosts
+                ?.Where(t => t.Url?.Contains("/JellyTV/", StringComparison.OrdinalIgnoreCase) == true
+                    && (t.Url.Contains("/JellyTV/m3u", StringComparison.OrdinalIgnoreCase)
+                        || t.Url.Contains("/JellyTV/tuner.m3u", StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+            if (own is null || own.Count == 0)
+            {
+                return;
+            }
+
+            options.TunerHosts = options.TunerHosts!.Except(own).ToArray();
+            _configurationManager.SaveConfiguration("livetv", options);
+            PluginLog.Info($"[LiveTV] Migrado a servicio nativo: {own.Count} tuner(s) M3U de JellyTV eliminados de Live TV.");
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"[LiveTV] No se pudo migrar el tuner M3U propio: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Base URL con la que el cliente que pide el stream alcanza a esta instancia. Prioridad: el host de la
+    /// petición en curso (localhost, LAN o dominio público: funciona en todos sin configurar nada) →
+    /// URL de respaldo configurada (para tareas sin petición, como el refresco de la guía) → último host
+    /// visto → localhost con aviso. Nunca se hardcodea un dominio de una instancia concreta.
+    /// </summary>
+    private string ResolveStreamBase()
+    {
+        var request = _httpContextAccessor.HttpContext?.Request;
+        if (request is not null && request.Host.HasValue)
+        {
+            return $"{ResolveScheme(request)}://{request.Host}{request.PathBase}".TrimEnd('/');
+        }
+
         var configured = Plugin.Instance?.Configuration?.PublicStreamingBaseUrl;
         if (!string.IsNullOrWhiteSpace(configured))
         {
@@ -112,13 +195,45 @@ public sealed class JellyTVLiveTvService : ILiveTvService, ISupportsDirectStream
             return known.TrimEnd('/');
         }
 
-        PluginLog.Warn("[LiveTV] Sin URL publica configurada ni KnownBaseUrl; usando localhost — el Path no sera alcanzable por clientes remotos. Configura 'URL publica de streaming' en el plugin.");
-        return $"http://localhost:{fallbackPort}";
+        PluginLog.Warn("[LiveTV] Sin petición, URL de respaldo ni host conocido; usando localhost.");
+        return $"http://localhost:{_httpPort}";
+    }
+
+    /// <summary>
+    /// Esquema con el que el cliente abrió Jellyfin. Detrás de un proxy que termina TLS, Request.Scheme puede
+    /// ser "http" aunque el navegador esté en https (y bloquearía el relay por contenido mixto), así que
+    /// se prefiere X-Forwarded-Proto y, si no, el Origin del propio navegador cuando coincide con el host.
+    /// </summary>
+    internal static string ResolveScheme(HttpRequest request)
+    {
+        var forwarded = request.Headers["X-Forwarded-Proto"].ToString().Split(',')[0].Trim();
+        if (forwarded is "http" or "https")
+        {
+            return forwarded;
+        }
+
+        if (Uri.TryCreate(request.Headers.Origin.ToString(), UriKind.Absolute, out var origin)
+            && string.Equals(origin.Authority, request.Host.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            return origin.Scheme;
+        }
+
+        return request.Scheme;
     }
 
     private static ChannelEntry GetChannel(string channelId) =>
         Config.Channels.FirstOrDefault(c => c.Id == channelId)
             ?? throw new KeyNotFoundException($"Channel '{channelId}' not found.");
+
+    /// <summary>
+    /// Returns the relay key query fragment required by the plugin's anonymous endpoints.
+    /// </summary>
+    /// <returns>The <c>&amp;key=…</c> fragment, or an empty string when no key exists.</returns>
+    private static string RelayKeyQuery()
+    {
+        var relayKey = Plugin.Instance?.Configuration?.RelayKey;
+        return string.IsNullOrWhiteSpace(relayKey) ? string.Empty : $"&key={Uri.EscapeDataString(relayKey)}";
+    }
 
     /// <summary>
     /// Elige la fuente que se intentará abrir: la primera fuente habilitada marcada como viva
@@ -136,14 +251,22 @@ public sealed class JellyTVLiveTvService : ILiveTvService, ISupportsDirectStream
         return enabled.FirstOrDefault(s => s.IsAlive == true) ?? enabled[0];
     }
 
-    private MediaSourceInfo BuildMediaSource(ChannelEntry channel)
+    private async Task<MediaSourceInfo> BuildMediaSourceAsync(ChannelEntry channel, CancellationToken cancellationToken)
     {
         channel.EnsureMigratedSources();
         var active = SelectActiveSource(channel);
         var encoded = EncodeUrl(active.Url);
-        // Paso 4 (migración a ILiveTvService): una sola fuente TS por ahora (relay &ts=1) para
-        // confirmar DirectPlay 0-ffmpeg en nativos antes de añadir la variante HLS (paso 5).
-        var tsMode = true;
+
+        // Directo: se entrega la URL del proveedor (Direct Play real, sin relay). FAST, tokens (efímeros o de sesión) y
+        // salidas por país pasan por el relay. Un token de sesión también: el proveedor lo ata a la IP que lo pidió
+        // (el servidor), así que entregárselo al cliente daba 403 y Jellyfin acababa transcodificando.
+        var useRelay = DeliveryPolicy.RequiresRelay(active) || !DeliveryPolicy.IsDirectMediaUrl(active.Url);
+        var path = useRelay
+            ? $"{ResolveStreamBase()}/JellyTV/stream.m3u8?url={encoded}&ch={channel.Id}{RelayKeyQuery()}"
+            : active.Url;
+        var container = !useRelay
+            ? (active.Url.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) ? "hls" : "ts")
+            : "hls";
 
         return new MediaSourceInfo
         {
@@ -160,16 +283,15 @@ public sealed class JellyTVLiveTvService : ILiveTvService, ISupportsDirectStream
             // el server sirve el relay HTTP estático sin invocar ffmpeg.
             // ch= permite a /JellyTV/stream resolver TODAS las fuentes del canal y, si la fuente
             // elegida no abre, hacer failover con la siguiente en orden.
-            // IMPORTANTE: el Path DEBE ser .../JellyTV/stream (SIN sufijo .m3u8). Verificado en
-            // producción: con la ruta stream.m3u8 Jellyfin (SupportsDirectStream(path,Http))
-            // niega DirectStream y el job de salida falla con "muxer .hls: Invalid argument"
-            // (ffmpeg exit -22). Con la ruta stream (mismo handler GetStream) se mantiene true.
-            Path = $"{ResolveStreamBase(_httpPort)}/JellyTV/stream?url={encoded}&ch={channel.Id}{(tsMode ? "&ts=1" : string.Empty)}",
+            // El Path del relay termina en .m3u8 a propósito: Jellyfin para Android TV crea el MediaItem de
+            // ExoPlayer solo con la URI (sin tipo MIME) y ExoPlayer reconoce HLS únicamente por la extensión
+            // de la ruta; sin ella intenta leer la playlist como un archivo progresivo y falla.
+            Path = path,
             Protocol = MediaProtocol.Http,
             // El relay sirve HLS (playlist+segmentos). Container es honesto por fuente: ts para
             // streams .ts directos, hls para el resto. (NOTA: cambiar a ts continuo no detiene el
             // transcode en clientes nativos y rompe el DirectPlay hls de la web — ver memoria.)
-            Container = tsMode ? "ts" : "hls",
+            Container = container,
             SupportsDirectStream = true,
             SupportsDirectPlay = true,
             // La fuente es remota y alcanzable por el cliente (Path = URL pública de la instancia):
@@ -194,8 +316,11 @@ public sealed class JellyTVLiveTvService : ILiveTvService, ISupportsDirectStream
             RequiresClosing = false,
             // Jellyfin usa RequiredHttpHeaders al leer la fuente remota (igual que el tuner M3U
             // nativo). Aquí se aplican los overrides por canal (User-Agent + cabeceras custom).
-            RequiredHttpHeaders = BuildRequiredHttpHeaders(channel),
-            MediaStreams = BuildStreams()
+            // Sin cabeceras no hay proxy: con RequiredHttpHeaders el cliente web no reproduce la Path directa y pide
+            // /Videos/{id}/stream.hls al servidor (que descarga y reenvía todo). El relay ya pone las suyas al
+            // hablar con el proveedor, así que solo las fuentes directas con cabeceras propias las necesitan.
+            RequiredHttpHeaders = useRelay ? new Dictionary<string, string>() : BuildRequiredHttpHeaders(channel),
+            MediaStreams = BuildStreams(active.Url)
         };
     }
 
@@ -206,24 +331,29 @@ public sealed class JellyTVLiveTvService : ILiveTvService, ISupportsDirectStream
     /// Normalize los resetea. Si un canal concreto emitiera HEVC/AC3, declarar aquí h264/aac
     /// rompería su DirectPlay — en ese caso añadir un override de códec por fuente.
     /// </summary>
-    private static List<MediaStream> BuildStreams()
+    private static List<MediaStream> BuildStreams(string sourceUrl)
     {
+        // Códecs reales si ya se vieron (CODECS del master); si no, h264/aac como siempre.
+        var known = SourceCodecs.Get(sourceUrl);
         return
         [
             new()
             {
                 Type = MediaStreamType.Video,
-                Index = 0,
-                Codec = "h264",
-                Profile = "High",
-                IsAVC = true,
+                // -1 = "no sé en qué posición del contenedor está", como los tuners estándar de Jellyfin. Con 0/1
+                // Android TV intenta fijar la pista de audio 1 al terminar de preparar, no encuentra ese índice en
+                // ExoPlayer y reinicia la reproducción una y otra vez (micro-reproducciones).
+                Index = -1,
+                Codec = known?.Video ?? "h264",
+                Profile = known is null ? "High" : known.VideoProfile,
+                IsAVC = (known?.Video ?? "h264") == "h264",
                 IsInterlaced = false
             },
             new()
             {
                 Type = MediaStreamType.Audio,
-                Index = 1,
-                Codec = "aac",
+                Index = -1,
+                Codec = known?.Audio ?? "aac",
                 Channels = 2,
                 SampleRate = 48000
             }
@@ -240,10 +370,12 @@ public sealed class JellyTVLiveTvService : ILiveTvService, ISupportsDirectStream
     {
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        var ua = string.IsNullOrWhiteSpace(channel.UserAgent)
-            ? Plugin.EffectiveUserAgent()
-            : Plugin.SanitizeHeaderValue(channel.UserAgent);
-        headers["User-Agent"] = ua;
+        // Solo el User-Agent propio del canal: el global no es un requisito del proveedor, y ponerlo
+        // convertiría cada canal en una descarga a través del servidor.
+        if (!string.IsNullOrWhiteSpace(channel.UserAgent))
+        {
+            headers["User-Agent"] = Plugin.SanitizeHeaderValue(channel.UserAgent);
+        }
 
         if (!string.IsNullOrWhiteSpace(channel.CustomHeaders))
         {
@@ -283,14 +415,20 @@ public sealed class JellyTVLiveTvService : ILiveTvService, ISupportsDirectStream
     public Task<IEnumerable<ProgramInfo>> GetProgramsAsync(string channelId, DateTime startDateUtc, DateTime endDateUtc, CancellationToken cancellationToken)
     {
         var programs = new List<ProgramInfo>();
+        if (!IsNativeMode)
+        {
+            return Task.FromResult<IEnumerable<ProgramInfo>>(programs);
+        }
+
         try
         {
             var channel = Config.Channels.FirstOrDefault(c => c.Id == channelId && c.IsEnabled);
-            if (channel is not null && !string.IsNullOrWhiteSpace(channel.TvgId))
+            if (channel is not null)
             {
-                foreach (var p in LocalEpgReader.GetPrograms(channel.TvgId, startDateUtc, endDateUtc))
+                // La guía se publica bajo el tvg-id o, si el canal no lo tiene, bajo una clave derivada de su id.
+                foreach (var p in LocalEpgReader.GetPrograms(EpgChannelMatcher.KeyFor(channel), startDateUtc, endDateUtc))
                 {
-                    programs.Add(MapProgram(p, channelId));
+                    programs.Add(MapProgram(p, channelId, channel.LogoUrl));
                 }
             }
 
@@ -313,9 +451,12 @@ public sealed class JellyTVLiveTvService : ILiveTvService, ISupportsDirectStream
     /// </summary>
     /// <param name="program">Programa local.</param>
     /// <param name="channelId">Id externo del canal (el del plugin).</param>
+    /// <param name="channelLogo">Logo del canal, que se muestra cuando el programa no tiene ninguna imagen.</param>
     /// <returns>ProgramInfo listo para la guía de Jellyfin.</returns>
-    private static ProgramInfo MapProgram(LocalProgramme program, string channelId)
+    private static ProgramInfo MapProgram(LocalProgramme program, string channelId, string? channelLogo)
     {
+        var hasOwnImage = !string.IsNullOrWhiteSpace(program.PosterUrl) || !string.IsNullOrWhiteSpace(program.BackdropUrl);
+        var logo = !hasOwnImage && !string.IsNullOrWhiteSpace(channelLogo) ? channelLogo : null;
         var info = new ProgramInfo
         {
             Id = $"{channelId}_{program.StartUtc:yyyyMMddHHmmss}",
@@ -325,9 +466,13 @@ public sealed class JellyTVLiveTvService : ILiveTvService, ISupportsDirectStream
             Genres = program.Categories.ToList(),
             StartDate = program.StartUtc,
             EndDate = program.EndUtc,
-            ImageUrl = program.IconUrl,
-            BackdropImageUrl = program.IconUrl,
-            HasImage = !string.IsNullOrWhiteSpace(program.IconUrl),
+            // Jellyfin usa la imagen principal (vertical) en las fichas y el fondo/thumb (horizontal) en las filas
+            // apaisadas: dar el póster como fondo lo dejaba recortado. Si solo hay una de las dos, se da solo esa.
+            // Sin imagen propia se usa el logo del canal (nunca como fondo: un logo recortado a pantalla completa se ve mal).
+            ImageUrl = program.PosterUrl ?? program.BackdropUrl ?? logo,
+            ThumbImageUrl = program.BackdropUrl ?? logo,
+            BackdropImageUrl = program.BackdropUrl,
+            HasImage = hasOwnImage || logo is not null,
             OfficialRating = string.IsNullOrWhiteSpace(program.Rating) ? null : program.Rating
         };
 
@@ -369,8 +514,20 @@ public sealed class JellyTVLiveTvService : ILiveTvService, ISupportsDirectStream
     /// <inheritdoc/>
     public Task<SeriesTimerInfo> GetNewTimerDefaultsAsync(CancellationToken cancellationToken, ProgramInfo? program = null) => Task.FromResult(new SeriesTimerInfo());
 
+    /// <summary>
+    /// Returns the default timer used by Jellyfin Live TV.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>An empty <see cref="TimerInfo"/>.</returns>
     public Task<TimerInfo> GetDefaultTimer(CancellationToken cancellationToken) => Task.FromResult(new TimerInfo());
 
+    /// <summary>
+    /// Returns the lineups exposed by this provider (none).
+    /// </summary>
+    /// <param name="info">Listings provider information.</param>
+    /// <param name="country">Country code.</param>
+    /// <param name="location">Location.</param>
+    /// <returns>An empty lineup list.</returns>
     public Task<List<NameIdPair>> GetLineups(ListingsProviderInfo info, string country, string location) => Task.FromResult(new List<NameIdPair>());
 
     /// <inheritdoc/>

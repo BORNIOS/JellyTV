@@ -5,12 +5,15 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.JellyTV.Configuration;
 using Jellyfin.Plugin.JellyTV.Models;
 using Jellyfin.Plugin.JellyTV.Services;
+using Jellyfin.Plugin.JellyTV.Services.Identity;
+using Jellyfin.Plugin.JellyTV.Services.Storage;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Controller.LiveTv;
@@ -38,11 +41,20 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
     // ══ Constructor ════════════════════════════════════════════════════
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="Plugin"/> class.
+    /// </summary>
+    /// <param name="applicationPaths">Jellyfin application paths.</param>
+    /// <param name="xmlSerializer">Serializer used for the plugin configuration.</param>
+    /// <param name="httpClientFactory">Factory used for outbound HTTP requests.</param>
+    /// <param name="loggerFactory">Factory used to create typed loggers.</param>
+    /// <param name="serviceProvider">Server service provider used to discover the PostgreSQL provider.</param>
     public Plugin(
         IApplicationPaths applicationPaths,
         IXmlSerializer xmlSerializer,
         IHttpClientFactory httpClientFactory,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IServiceProvider serviceProvider)
         : base(applicationPaths, xmlSerializer)
     {
         ConfigureLogDirectory(applicationPaths);
@@ -59,6 +71,12 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         }
 
         Instance = this;
+        DataDirectory = Path.Combine(applicationPaths.DataPath, "JellyTV");
+        Storage = StorageBackend.Create(serviceProvider, Configuration, DataDirectory, Id);
+        ApplyPersistentStore();
+        ChannelCatalog = new ChannelCatalog(Storage, loggerFactory.CreateLogger<ChannelCatalog>());
+        ChannelCatalog.Hydrate(Configuration.Channels);
+        EnsureRelayKey();
         HttpClientFactory = httpClientFactory;
 
         try
@@ -66,15 +84,17 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             var localFactory = new LocalHttpClientFactory(httpClientFactory, EffectiveUserAgent());
 
             var proxyPool = new ProxyPoolService(EffectiveUserAgent());
+            ProxyPool = proxyPool;
+            Upstream = new UpstreamClientService(localFactory, proxyPool);
             RedirectResolver = new RedirectResolverService(localFactory, loggerFactory.CreateLogger<RedirectResolverService>(), proxyPool);
-            HlsRewriter = new HlsRewriterService(localFactory, proxyPool, RedirectResolver, loggerFactory.CreateLogger<HlsRewriterService>());
-            SessionManager = new SessionManagerService(RedirectResolver, loggerFactory.CreateLogger<SessionManagerService>());
-            ChannelHealthCheck = new ChannelHealthCheckService(localFactory, loggerFactory.CreateLogger<ChannelHealthCheckService>(), SessionManager, applicationPaths);
-            var epgFilePath = Path.Combine(applicationPaths.DataPath, "JellyTV", "epg.xml");
+            HlsRewriter = new HlsRewriterService(localFactory, proxyPool, Upstream, RedirectResolver, loggerFactory.CreateLogger<HlsRewriterService>());
+            SessionManager = new SessionManagerService(RedirectResolver, Upstream, loggerFactory.CreateLogger<SessionManagerService>());
+            ChannelHealthCheck = new ChannelHealthCheckService(localFactory, loggerFactory.CreateLogger<ChannelHealthCheckService>(), SessionManager, Upstream, applicationPaths);
+            var epgFilePath = Path.Combine(DataDirectory, "epg.xml");
             EpgFilter = new EpgFilterService(localFactory, epgFilePath, loggerFactory.CreateLogger<EpgFilterService>());
-            DataDirectory = Path.Combine(applicationPaths.DataPath, "JellyTV");
             CachePath = applicationPaths.CachePath;
             TmdbEnrichment = new TmdbEnrichmentService(localFactory, loggerFactory.CreateLogger<TmdbEnrichmentService>());
+            ChannelIdentity = new ChannelIdentityService(localFactory, loggerFactory.CreateLogger<ChannelIdentityService>());
 
             SessionManager.StartAsync(default).GetAwaiter().GetResult();
             PluginLog.Info("All services started OK");
@@ -90,21 +110,47 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
     // ══ Estado y servicios expuestos ═════════════════════════════════════
 
+    /// <summary>Gets the active plugin instance.</summary>
     public static Plugin? Instance { get; private set; }
 
+    /// <summary>Gets or sets the Jellyfin metadata provider manager, captured from DI when the Live TV service is built.</summary>
+    internal static MediaBrowser.Controller.Providers.IProviderManager? NativeProviders { get; set; }
+
+    /// <summary>Gets the pool of proxies that streams exit through.</summary>
+    public ProxyPoolService ProxyPool { get; }
+
+    /// <summary>Gets the service that picks the HTTP client (direct or through a proxy) for each download.</summary>
+    public UpstreamClientService Upstream { get; }
+
+    /// <summary>Gets the redirect resolver service.</summary>
     public RedirectResolverService RedirectResolver { get; }
 
+    /// <summary>Gets the HLS playlist rewriter service.</summary>
     public HlsRewriterService HlsRewriter { get; }
 
+    /// <summary>Gets the stream session manager.</summary>
     public SessionManagerService SessionManager { get; }
 
+    /// <summary>Gets the channel health check service.</summary>
     public ChannelHealthCheckService ChannelHealthCheck { get; }
 
+    /// <summary>Gets the local EPG filter service.</summary>
     public EpgFilterService EpgFilter { get; }
 
+    /// <summary>Gets the TMDB enrichment service.</summary>
     public TmdbEnrichmentService TmdbEnrichment { get; }
 
+    /// <summary>Gets the service that resolves channel identities (TVMaze and TMDB).</summary>
+    public ChannelIdentityService ChannelIdentity { get; }
+
+    /// <summary>Gets the HTTP client factory used by the plugin.</summary>
     public IHttpClientFactory HttpClientFactory { get; }
+
+    /// <summary>Gets the active storage backend (PostgreSQL through PG Provider, or local JSON files).</summary>
+    public StorageBackend? Storage { get; private set; }
+
+    /// <summary>Gets the in-memory channel index used for health checks and failover decisions.</summary>
+    public ChannelCatalog? ChannelCatalog { get; private set; }
 
     /// <summary>Gets directorio de datos del plugin (EPG, M3U tuner, etc.).</summary>
     public string DataDirectory { get; private set; } = string.Empty;
@@ -125,6 +171,155 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public override string Description => "TV channel manager with automatic token renewal for IPTV streams.";
 
     // ══ Helpers ═════════════════════════════════════════════════════════
+
+    /// <inheritdoc/>
+    public override void UpdateConfiguration(BasePluginConfiguration configuration)
+    {
+        // La página de ajustes guarda la copia que cargó al abrirse: si entre tanto corrió un chequeo de salud,
+        // esa copia trae el estado viejo y lo pisaría. Se conserva el resultado más reciente de cada fuente.
+        if (configuration is PluginConfiguration incoming)
+        {
+            var known = Configuration.Channels
+                .SelectMany(static c => c.Sources)
+                .Where(static s => s.LastCheckedAt.HasValue)
+                .GroupBy(static s => s.Id, StringComparer.Ordinal)
+                .ToDictionary(static g => g.Key, static g => g.First(), StringComparer.Ordinal);
+            foreach (var channel in incoming.Channels)
+            {
+                foreach (var source in channel.Sources)
+                {
+                    if (known.TryGetValue(source.Id, out var current)
+                        && (!source.LastCheckedAt.HasValue || source.LastCheckedAt < current.LastCheckedAt))
+                    {
+                        source.IsAlive = current.IsAlive;
+                        source.LastError = current.LastError;
+                        source.LastCheckedAt = current.LastCheckedAt;
+                    }
+                }
+
+                var enabled = channel.Sources.Where(static s => s.IsEnabled && !string.IsNullOrWhiteSpace(s.Url)).ToList();
+                channel.LastCheckAlive = enabled.Any(static s => s.IsAlive == true) ? true : enabled.Any(static s => s.IsAlive == false) ? false : null;
+                channel.LastCheckedAt = enabled.Where(static s => s.LastCheckedAt.HasValue).Select(static s => s.LastCheckedAt).Max();
+                channel.LastCheckError = enabled.FirstOrDefault(static s => s.IsAlive == false)?.LastError;
+            }
+        }
+
+        base.UpdateConfiguration(configuration);
+    }
+
+    /// <inheritdoc/>
+    public override void SaveConfiguration(PluginConfiguration config)
+    {
+        // During the base constructor the XML fallback can call back here before the store exists.
+        if (Storage is null)
+        {
+            base.SaveConfiguration(config);
+            return;
+        }
+
+        var stored = false;
+        try
+        {
+            Storage.Save(JellyTvStoreSnapshot.FromConfiguration(config));
+            stored = true;
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"[STORAGE] Could not persist to {Storage.Description}: {ex.Message}");
+        }
+
+        // Con base de datos como almacén, el XML conserva solo los ajustes: los canales viven
+        // únicamente en la DB. Si el guardado en la DB falló, el XML completo es el respaldo.
+        if (stored && Storage.UsesDatabase)
+        {
+            SaveSettingsOnlyXml(config);
+            return;
+        }
+
+        base.SaveConfiguration(config);
+    }
+
+    private void SaveSettingsOnlyXml(PluginConfiguration config)
+    {
+        try
+        {
+            XmlSerializer.SerializeToFile(config.CloneSettingsOnly(), ConfigurationFilePath);
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"[STORAGE] Could not write the settings-only XML: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Hydrates the configuration from the active store, or seeds an empty store from the XML
+    /// configuration. This keeps switching between PostgreSQL and JSON lossless.
+    /// </summary>
+    private void ApplyPersistentStore()
+    {
+        if (Storage is null)
+        {
+            return;
+        }
+
+        var snapshot = Storage.Store.Load();
+        if (snapshot is { HasData: true })
+        {
+            Configuration.Channels = snapshot.Channels;
+            Configuration.Proxies = snapshot.Proxies;
+            Configuration.EpgSources = snapshot.EpgSources;
+            PluginLog.Info($"[STORAGE] Loaded {snapshot.Channels.Count} channels, {snapshot.Proxies.Count} proxies and {snapshot.EpgSources.Count} EPG sources from {Storage.Description}.");
+            try
+            {
+                Storage.WriteJsonBackup(snapshot);
+            }
+            catch (Exception ex)
+            {
+                PluginLog.Warn($"[STORAGE] Could not refresh the JSON backup: {ex.Message}");
+            }
+
+            if (Storage.UsesDatabase)
+            {
+                SaveSettingsOnlyXml(Configuration);
+            }
+
+            return;
+        }
+
+        if (Configuration.Channels.Count > 0 || Configuration.Proxies.Count > 0 || Configuration.EpgSources.Count > 0)
+        {
+            Storage.Save(JellyTvStoreSnapshot.FromConfiguration(Configuration));
+            PluginLog.Info($"[STORAGE] Seeded {Storage.Description} from the plugin configuration.");
+            if (Storage.UsesDatabase)
+            {
+                SaveSettingsOnlyXml(Configuration);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Ensures that a relay key exists so the anonymous relay endpoints cannot be
+    /// used as an open proxy. The key is generated once and persisted in the plugin config.
+    /// </summary>
+    private void EnsureRelayKey()
+    {
+        var config = Configuration;
+        if (!string.IsNullOrWhiteSpace(config.RelayKey))
+        {
+            return;
+        }
+
+        config.RelayKey = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+        try
+        {
+            SaveConfiguration();
+            PluginLog.Info("[SECURITY] Relay key generated.");
+        }
+        catch (Exception ex)
+        {
+            PluginLog.Warn($"[SECURITY] Could not persist relay key: {ex.Message}");
+        }
+    }
 
     /// <summary>
     /// User-Agent efectivo del plugin: el de Configuration si está definido, si no el default.

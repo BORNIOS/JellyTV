@@ -5,6 +5,9 @@ using System.Text.RegularExpressions;
 
 namespace Jellyfin.Plugin.JellyTV.Services.Tmdb;
 
+/// <summary>
+/// Normalizes programme titles by stripping noise tokens, accents and punctuation.
+/// </summary>
 public sealed class TmdbNormalizationService : ITmdbNormalizationService
 {
     private static readonly Regex MultiSpaceRe = new("\\s+", RegexOptions.Compiled);

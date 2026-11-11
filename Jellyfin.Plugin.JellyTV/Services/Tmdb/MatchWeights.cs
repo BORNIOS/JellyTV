@@ -27,6 +27,8 @@ internal sealed class MatchWeights
 
     public double AliasBonus { get; init; } = 0.18;
 
+    public double CountryMatchBonus { get; init; } = 0.15;
+
     public double MismatchPenalty { get; init; } = 0.45;
 
     public double MinimumAcceptableScore { get; init; } = 1.55;

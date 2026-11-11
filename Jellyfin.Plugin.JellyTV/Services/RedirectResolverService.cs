@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -16,6 +18,19 @@ public class RedirectResolverService
 {
     // Hardcoded constants (not configurable to avoid interference with token renewal logic)
     private const int MAXREDIRECTS = 20;
+
+    private static readonly Regex QuotedPlaylistRegex = new(
+        @"[""'](?<u>[^""'\s<>]*\.m3u8?(?![A-Za-z0-9])[^""'\s<>]*)[""']",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex BarePlaylistRegex = new(
+        @"https?://[^""'\s<>]+?\.m3u8?(?![A-Za-z0-9])(?:\?[^""'\s<>]*)?",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    private static readonly Regex TokenParamRegex = new(
+        @"[?&](?:token|access_token|auth|t|key|sig|tokenid|tkn|hdnea|expires)=",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<RedirectResolverService> _logger;
     private readonly ProxyPoolService _proxyPool;
@@ -63,19 +78,20 @@ public class RedirectResolverService
         bool proxyMarkedFailed = proxyKey is null;
 
         var currentUrl = originalUrl;
+        string? referer = null;
         var redirectCount = 0;
         var redirectChain = new List<string> { originalUrl };
         string contentType = string.Empty;
         string? initialPlaylistContent = null;
         string? rotationNodeUrl = null;
 
-        if (Plugin.Instance?.Configuration.VerboseLogging == true)
+        if (Plugin.Instance?.Configuration.VerboseLogging == true && _logger.IsEnabled(LogLevel.Information))
         {
-            _logger.LogInformation("[JellyTV] Starting resolution for: {Url}", originalUrl);
+            _logger.LogInformation("[JellyTV] Starting resolution for: {Url}", PluginLog.Redact(originalUrl));
         }
-        else
+        else if (_logger.IsEnabled(LogLevel.Debug))
         {
-            _logger.LogDebug("[JellyTV] Starting resolution for: {Url}", originalUrl);
+            _logger.LogDebug("[JellyTV] Starting resolution for: {Url}", PluginLog.Redact(originalUrl));
         }
 
         while (redirectCount <= maxRedirects)
@@ -87,7 +103,7 @@ public class RedirectResolverService
             try
             {
                 PluginLog.Info($"[RESOLVE] GET {currentUrl} (attempt {redirectCount + 1})");
-                var (resp, usedFallback) = await SendWithFallbackAsync(client, directClient, currentUrl, cancellationToken).ConfigureAwait(false);
+                var (resp, usedFallback) = await SendWithFallbackAsync(client, directClient, currentUrl, referer, cancellationToken).ConfigureAwait(false);
                 response = resp;
                 PluginLog.Info($"[RESOLVE] Response {currentUrl} -> {(int)response.StatusCode}");
 
@@ -102,19 +118,38 @@ public class RedirectResolverService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[JellyTV] HTTP error fetching {Url}", currentUrl);
+                _logger.LogError(ex, "[JellyTV] HTTP error fetching {Url}", PluginLog.Redact(currentUrl));
                 PluginLog.Error($"[RESOLVE] HTTP error fetching {currentUrl}", ex);
                 throw;
             }
 
             contentType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
 
+            // Algunos gateways exigen Referer de su propio sitio (403 sin él), incluso cuando la
+            // fuente configurada es el reproductor embebido. Se reintenta una vez con el origen.
+            if ((int)response.StatusCode is 401 or 403 && string.IsNullOrWhiteSpace(referer))
+            {
+                var origin = new Uri(currentUrl).GetLeftPart(UriPartial.Authority) + "/";
+                response.Dispose();
+                var (retryResponse, retryFallback) = await SendWithFallbackAsync(client, directClient, currentUrl, origin, cancellationToken).ConfigureAwait(false);
+                response = retryResponse;
+                if (retryFallback && !proxyMarkedFailed && proxyKey is not null)
+                {
+                    proxyMarkedFailed = true;
+                    _proxyPool.MarkFailed(proxyKey);
+                    client = directClient;
+                }
+
+                PluginLog.Info($"[RESOLVE] Retried {currentUrl} with Referer {origin} -> {(int)response.StatusCode}");
+                contentType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
+            }
+
             if ((int)response.StatusCode is >= 300 and < 400)
             {
                 var location = response.Headers.Location;
                 if (location is null)
                 {
-                    _logger.LogWarning("[JellyTV] Redirect with no Location header at {Url}", currentUrl);
+                    _logger.LogWarning("[JellyTV] Redirect with no Location header at {Url}", PluginLog.Redact(currentUrl));
                     PluginLog.Warn($"[RESOLVE] Redirect with no Location header at {currentUrl}");
                     break;
                 }
@@ -124,7 +159,11 @@ public class RedirectResolverService
                     ? location.ToString()
                     : new Uri(new Uri(currentUrl), location).ToString();
 
-                _logger.LogDebug("[JellyTV] Redirect {Count}: {From} -> {To}", redirectCount + 1, currentUrl, nextUrl);
+                if (_logger.IsEnabled(LogLevel.Debug))
+                {
+                    _logger.LogDebug("[JellyTV] Redirect {Count}: {From} -> {To}", redirectCount + 1, PluginLog.Redact(currentUrl), PluginLog.Redact(nextUrl));
+                }
+
                 PluginLog.Info($"[RESOLVE] Redirect {redirectCount + 1}: {currentUrl} -> {nextUrl}");
                 // Track the rotation node: the hop that outputs a tokenized redirect destination.
                 if (IsRotationSignal(nextUrl))
@@ -134,6 +173,7 @@ public class RedirectResolverService
 
                 // Record redirect hop
                 redirectChain.Add(nextUrl);
+                referer = currentUrl;
                 currentUrl = nextUrl;
                 redirectCount++;
                 response.Dispose();
@@ -151,8 +191,13 @@ public class RedirectResolverService
                         rotationNodeUrl = currentUrl;
                     }
 
-                    _logger.LogDebug("[JellyTV] Meta refresh {Count}: {From} -> {To}", redirectCount + 1, currentUrl, metaUrl);
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                    {
+                        _logger.LogDebug("[JellyTV] Meta refresh {Count}: {From} -> {To}", redirectCount + 1, PluginLog.Redact(currentUrl), PluginLog.Redact(metaUrl));
+                    }
+
                     redirectChain.Add(metaUrl);
+                    referer = currentUrl;
                     currentUrl = metaUrl;
                     redirectCount++;
                     response.Dispose();
@@ -170,7 +215,11 @@ public class RedirectResolverService
                         rotationNodeUrl = currentUrl;
                     }
 
-                    _logger.LogDebug("[JellyTV] Embedded HLS {Count}: {From} -> {To}", redirectCount + 1, currentUrl, embeddedUrl);
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                    {
+                        _logger.LogDebug("[JellyTV] Embedded HLS {Count}: {From} -> {To}", redirectCount + 1, PluginLog.Redact(currentUrl), PluginLog.Redact(embeddedUrl));
+                    }
+
                     PluginLog.Info($"[RESOLVE] Embedded HLS in HTML: {currentUrl} -> {embeddedUrl}");
                     redirectChain.Add(embeddedUrl);
                     currentUrl = embeddedUrl;
@@ -182,6 +231,26 @@ public class RedirectResolverService
                 if (IsHlsUrl(currentUrl, contentType))
                 {
                     initialPlaylistContent = html;
+                }
+
+                // Gateway → iframe player: la página "online.php?stream=..." no trae el m3u8,
+                // lo entrega el reproductor embebido. Se sigue el iframe (nunca beacons) y en
+                // esa página aparece el m3u8 con token.
+                var iframeUrl = TryExtractIframeUrl(html, currentUrl);
+                if (iframeUrl is not null && !string.Equals(iframeUrl, currentUrl, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                    {
+                        _logger.LogDebug("[JellyTV] Iframe player {Count}: {From} -> {To}", redirectCount + 1, PluginLog.Redact(currentUrl), PluginLog.Redact(iframeUrl));
+                    }
+
+                    PluginLog.Info($"[RESOLVE] Iframe player {redirectCount + 1}: {currentUrl} -> {iframeUrl}");
+                    redirectChain.Add(iframeUrl);
+                    referer = currentUrl;
+                    currentUrl = iframeUrl;
+                    redirectCount++;
+                    response.Dispose();
+                    continue;
                 }
 
                 response.Dispose();
@@ -207,7 +276,7 @@ public class RedirectResolverService
                     continue;
                 }
 
-                _logger.LogWarning("[JellyTV] Non-success HTTP {Status} while resolving {Url}", (int)response.StatusCode, currentUrl);
+                _logger.LogWarning("[JellyTV] Non-success HTTP {Status} while resolving {Url}", (int)response.StatusCode, PluginLog.Redact(currentUrl));
                 PluginLog.Warn($"[RESOLVE] Non-success HTTP {(int)response.StatusCode} while resolving {currentUrl}");
                 // Throw an HttpRequestException that preserves the status code for callers to handle
                 var status = response.StatusCode;
@@ -215,7 +284,7 @@ public class RedirectResolverService
                 throw new HttpRequestException($"Response status code does not indicate success: {(int)status} ({status}).", null, status);
             }
 
-            // ponytail: don't read the body for tokenized streams — it consumes
+            // don't read the body for tokenized streams — it consumes
             // the single-use token that HlsRewriterService needs for the first fetch.
             string? resolverBodyText = null;
             var ct2 = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
@@ -281,20 +350,20 @@ public class RedirectResolverService
         resolved.RotationNodeUrl = rotationNodeUrl;
         resolved.ResolverProxyKey = proxyKey;
 
-        if (Plugin.Instance?.Configuration.VerboseLogging == true)
+        if (Plugin.Instance?.Configuration.VerboseLogging == true && _logger.IsEnabled(LogLevel.Information))
         {
             _logger.LogInformation(
                 "[JellyTV] Resolved to: {FinalUrl} | HLS={IsHls} | TokenExpiry={Expiry} | TokenPresent={TokenPresent}",
-                currentUrl,
+                PluginLog.Redact(currentUrl),
                 isHls,
                 tokenExpiry?.ToString("o") ?? "unknown",
                 !string.IsNullOrEmpty(tokenValue));
         }
-        else
+        else if (_logger.IsEnabled(LogLevel.Debug))
         {
             _logger.LogDebug(
                 "[JellyTV] Resolved to: {FinalUrl} | HLS={IsHls} | TokenExpiry={Expiry} | TokenPresent={TokenPresent}",
-                currentUrl,
+                PluginLog.Redact(currentUrl),
                 isHls,
                 tokenExpiry?.ToString("o") ?? "unknown",
                 !string.IsNullOrEmpty(tokenValue));
@@ -346,13 +415,14 @@ public class RedirectResolverService
     }
 
     /// <summary>
-    /// Extracts an HLS playback URL embedded in an HTML/JS gateway page, e.g.
-    /// <c>var playbackURL = "https://host/mono.m3u8?token=..."</c>. Some providers
-    /// never 3xx — they hand the tokenized m3u8 inside the body.
-    /// Only absolute http(s) URLs containing ".m3u8" are accepted, which avoids picking
-    /// up unrelated CDN <c>src=</c> script tags. Returns null when none is found.
+    /// Extracts the HLS playlist embedded in an HTML/JS gateway page, whatever the player or variable
+    /// holding it (<c>"src":"…"</c>, <c>playbackURL = '…'</c>, JSON-escaped <c>https:\/\/</c>, entities). Any
+    /// <c>.m3u8</c>/<c>.m3u</c> URL is a candidate; the one carrying a token is the official stream, so it
+    /// wins over plain ones (ads, trailers). Without a token, the first candidate is used.
     /// </summary>
-    /// <returns></returns>
+    /// <param name="html">Gateway HTML.</param>
+    /// <param name="baseUrl">URL of the page, used to resolve relative sources.</param>
+    /// <returns>The absolute playlist URL, or <c>null</c> when the page has none.</returns>
     internal static string? TryExtractEmbeddedPlaybackUrl(string html, string baseUrl)
     {
         if (string.IsNullOrWhiteSpace(html) || html.Length > 64 * 1024)
@@ -360,25 +430,86 @@ public class RedirectResolverService
             return null;
         }
 
-        // 1) Quoted assignments to playback-ish JS variables (playbackURL, source, ...).
-        var assignment = Regex.Match(
-            html,
-            @"(?:playbackURL|playbackUrl|playback|hlsUrl|streamUrl|stream|videoUrl|source|file|link|src|url)\s*[:=]\s*[""'](?<u>[^""']+)[""']",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        while (assignment.Success)
+        var text = WebUtility.HtmlDecode(html.Replace("\\/", "/", StringComparison.Ordinal).Replace("\\u0026", "&", StringComparison.OrdinalIgnoreCase));
+        string? first = null;
+        foreach (var raw in QuotedPlaylistRegex.Matches(text).Select(m => m.Groups["u"].Value)
+                     .Concat(BarePlaylistRegex.Matches(text).Select(m => m.Value)))
         {
-            var url = ResolveHtmlUrl(baseUrl, assignment.Groups["u"].Value);
-            if (url is not null && url.Contains(".m3u8", StringComparison.OrdinalIgnoreCase))
+            var url = ResolveHtmlUrl(baseUrl, raw);
+            if (url is null)
+            {
+                continue;
+            }
+
+            if (TokenParamRegex.IsMatch(url) || url.Contains("/hlsr/", StringComparison.OrdinalIgnoreCase))
             {
                 return url;
             }
 
-            assignment = assignment.NextMatch();
+            first ??= url;
         }
 
-        // 2) Fallback: the first absolute .m3u8 URL anywhere in the document.
-        var any = Regex.Match(html, @"https?://[^""'\s<>]+?\.m3u8(?:\?[^""'\s<>]*)?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        return any.Success ? any.Value : null;
+        return first;
+    }
+
+    /// <summary>
+    /// Extracts the player iframe of a gateway page, e.g. <c>&lt;iframe src="/5.php?stream=..."&gt;</c>.
+    /// Tracking/beacon shells are rejected, and iframes whose URL looks like a player are preferred.
+    /// </summary>
+    /// <param name="html">Gateway HTML.</param>
+    /// <param name="baseUrl">URL of the gateway page, used to resolve relative sources.</param>
+    /// <returns>The absolute iframe URL, or <c>null</c> when none is usable.</returns>
+    internal static string? TryExtractIframeUrl(string html, string baseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(html) || html.Length > 64 * 1024)
+        {
+            return null;
+        }
+
+        var matches = Regex.Matches(
+            html,
+            "<iframe\\b[^>]*\\bsrc\\s*=\\s*[\"'](?<u>[^\"']+)[\"']",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        string? fallback = null;
+        foreach (Match match in matches)
+        {
+            var url = ResolveHtmlUrl(baseUrl, WebUtility.HtmlDecode(match.Groups["u"].Value));
+            if (url is null || IsBeaconOrAdUrl(url))
+            {
+                continue;
+            }
+
+            if (url.Contains("stream=", StringComparison.OrdinalIgnoreCase)
+                || url.Contains("player", StringComparison.OrdinalIgnoreCase)
+                || url.Contains("embed", StringComparison.OrdinalIgnoreCase)
+                || url.Contains("online", StringComparison.OrdinalIgnoreCase))
+            {
+                return url;
+            }
+
+            fallback ??= url;
+        }
+
+        return fallback;
+    }
+
+    /// <summary>
+    /// Rejects tracking pixels, ad shells and pop-under links so the resolver never follows them.
+    /// </summary>
+    /// <param name="url">Candidate URL.</param>
+    /// <returns><c>true</c> when the URL must not be followed.</returns>
+    private static bool IsBeaconOrAdUrl(string url)
+    {
+        var value = url.ToLowerInvariant();
+        return value.Contains("block.html", StringComparison.Ordinal)
+            || value.Contains("trkr.", StringComparison.Ordinal)
+            || value.Contains("/ads/", StringComparison.Ordinal)
+            || value.Contains("adservice", StringComparison.Ordinal)
+            || value.Contains("doubleclick", StringComparison.Ordinal)
+            || value.Contains("googlesyndication", StringComparison.Ordinal)
+            || value.Contains("popup", StringComparison.Ordinal)
+            || value.Contains("banner", StringComparison.Ordinal);
     }
 
     private static string? ResolveHtmlUrl(string baseUrl, string raw)
@@ -423,8 +554,8 @@ public class RedirectResolverService
 
             if (!response.IsSuccessStatusCode)
             {
-                // A 302 at the top of an HTTPS→HTTP chain is expected for providers like
-                // jellytv.hmovies.tv (the auto-redirect client cannot downgrade schemes).
+                // A 302 at the top of an HTTPS→HTTP chain is expected for providers behind a gateway like
+                // gateway.example (the auto-redirect client cannot downgrade schemes).
                 // Log as INFO so it does not pollute the warning stream on normal operation.
                 var sc = (int)response.StatusCode;
                 if (sc is >= 300 and < 400)
@@ -442,7 +573,7 @@ public class RedirectResolverService
             var finalUrl = response.RequestMessage?.RequestUri?.ToString() ?? originalUrl;
             var contentType = response.Content.Headers.ContentType?.MediaType ?? string.Empty;
 
-            // ponytail: don't read the response body. For tokenized streams the
+            // don't read the response body. For tokenized streams the
             // token is single-use and ReadAsStringAsync consumes it. The playlist
             // is fetched separately by HlsRewriterService after resolution.
             // The old BroadcastPump (dead code) was the only consumer of this.
@@ -486,9 +617,9 @@ public class RedirectResolverService
     /// Returns the response and a flag indicating whether the fallback was used.
     /// </summary>
     private static async Task<(HttpResponseMessage Response, bool UsedFallback)> SendWithFallbackAsync(
-        HttpClient preferred, HttpClient fallback, string url, CancellationToken ct)
+        HttpClient preferred, HttpClient fallback, string url, string? referer, CancellationToken ct)
     {
-        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        using var req = BuildRequest(url, referer);
         try
         {
             var resp = await preferred.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
@@ -497,10 +628,21 @@ public class RedirectResolverService
         catch (HttpRequestException ex) when (preferred != fallback)
         {
             PluginLog.Warn($"[RESOLVE] Proxy failed for {url}: {ex.Message} — retrying direct");
-            using var retryReq = new HttpRequestMessage(HttpMethod.Get, url);
+            using var retryReq = BuildRequest(url, referer);
             var resp = await fallback.SendAsync(retryReq, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
             return (resp, true);
         }
+    }
+
+    private static HttpRequestMessage BuildRequest(string url, string? referer)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        if (!string.IsNullOrWhiteSpace(referer) && Uri.TryCreate(referer, UriKind.Absolute, out var refererUri))
+        {
+            request.Headers.Referrer = refererUri;
+        }
+
+        return request;
     }
 
     private string? TryExtractTokenFromUrl(string url)
@@ -585,9 +727,11 @@ public class RedirectResolverService
     }
 
     /// <summary>
-    /// Attempts to extract a token expiry time from common query parameter patterns.
+    /// Attempts to extract a token expiry time from common query parameter patterns or from the
+    /// epoch pair some providers embed in the token itself
+    /// (e.g. <c>hash-28-1792327724-1792309724</c>).
     /// </summary>
-    private DateTimeOffset? TryParseTokenExpiry(string url)
+    internal static DateTimeOffset? TryParseTokenExpiry(string url)
     {
         try
         {
@@ -608,10 +752,38 @@ public class RedirectResolverService
                     return DateTimeOffset.FromUnixTimeSeconds(unixTimestamp);
                 }
             }
+
+            // Tokens that carry their own epoch pair: the largest plausible future epoch is the expiry.
+            var token = query["token"] ?? query["access_token"] ?? string.Empty;
+            if (token.Length > 0)
+            {
+                var now = DateTimeOffset.UtcNow;
+                var floor = now.AddDays(-1).ToUnixTimeSeconds();
+                var ceiling = now.AddDays(7).ToUnixTimeSeconds();
+                DateTimeOffset? best = null;
+                foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(token, "(?<![0-9])(1[6-9][0-9]{8})(?![0-9])"))
+                {
+                    if (!long.TryParse(match.Groups[1].Value, out var epoch) || epoch < floor || epoch > ceiling)
+                    {
+                        continue;
+                    }
+
+                    var candidate = DateTimeOffset.FromUnixTimeSeconds(epoch);
+                    if (best is null || candidate > best)
+                    {
+                        best = candidate;
+                    }
+                }
+
+                if (best is not null)
+                {
+                    return best;
+                }
+            }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            _logger.LogDebug(ex, "[JellyTV] Could not parse token expiry from URL");
+            // URL sin expiración parseable: se usa el intervalo de respaldo.
         }
 
         return null;

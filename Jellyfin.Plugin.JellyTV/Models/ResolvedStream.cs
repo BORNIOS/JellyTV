@@ -4,6 +4,9 @@ using System.Collections.Generic;
 
 namespace Jellyfin.Plugin.JellyTV.Models;
 
+/// <summary>
+/// Result of resolving an upstream channel URL, including redirects and token information.
+/// </summary>
 public class ResolvedStream
 {
     /// <summary>
