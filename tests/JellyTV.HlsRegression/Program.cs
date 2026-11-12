@@ -10,6 +10,8 @@ if (args.Length >= 2)
 
 TimelineRegression.Run();
 AutoGuideRegression.Run();
+DvrWindowRegression.Run();
+await GuideIdentityRegression.RunAsync();
 if (args.Contains("--live")) await AutoGuideLiveCheck.RunAsync();
 
 var relay = new HlsRewriterService(null!, null!, null!, null!, NullLogger<HlsRewriterService>.Instance);

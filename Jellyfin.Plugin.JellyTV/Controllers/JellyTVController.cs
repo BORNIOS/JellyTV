@@ -895,8 +895,12 @@ public class JellyTVController : ControllerBase
     [Authorize(Policy = Policies.RequiresElevation)]
     public async Task<IActionResult> SearchIdentity([FromQuery] string q, [FromQuery] string? country, [FromQuery] string? tvgId, CancellationToken ct)
     {
-        var candidates = await P.ChannelIdentity.SearchAsync(q, country, tvgId, ct).ConfigureAwait(false);
-        return Ok(candidates);
+        var candidates = (await P.ChannelIdentity.SearchAsync(q, country, tvgId, ct).ConfigureAwait(false)).ToList();
+
+        // Las guías locales (Pluto, Samsung, Plex, Tubi) no usan tvg-id sino su propio id de canal: se ofrecen como un candidato
+        // más y decide el administrador. Nada se aplica solo.
+        candidates.AddRange(GuideChannelCatalog.Search(P.EpgFilter.LoadGuideChannels(P.Configuration.EpgSources), q, country, tvgId));
+        return Ok(candidates.OrderByDescending(static c => c.Score).ToList());
     }
 
     /// <summary>
@@ -1094,6 +1098,11 @@ public class JellyTVController : ControllerBase
                 return NotFound(new { error = "No channels found" });
             }
 
+            if (healthCheck.IsRunning)
+            {
+                return Conflict(new { error = "Ya hay una revisión de salud en curso" });
+            }
+
             // Execute in background
             _ = Task.Run(
                 async () =>
@@ -1103,7 +1112,7 @@ public class JellyTVController : ControllerBase
                         channel => (Enabled: channel.IsEnabled, AutoDisabled: channel.AutoDisabled),
                         StringComparer.Ordinal);
 
-                    await healthCheck.CheckConfiguredChannelsAsync("manual", channels, CancellationToken.None).ConfigureAwait(false);
+                    await healthCheck.CheckConfiguredChannelsAsync("manual", channels, true, CancellationToken.None).ConfigureAwait(false);
 
                     try
                     {
@@ -1135,6 +1144,39 @@ public class JellyTVController : ControllerBase
             return StatusCode(500, new { error = ex.Message });
         }
     }
+
+    /// <summary>Avance de la revisión de salud en curso (o de la última terminada).</summary>
+    /// <returns>Estado, fuentes comprobadas y totales.</returns>
+    [HttpGet("health-check/status")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public IActionResult GetHealthCheckStatus()
+    {
+        var healthCheck = Plugin.Instance?.ChannelHealthCheck;
+        return healthCheck is null ? StatusCode(500, new { error = "Service not available" }) : Ok(ProgressDto(healthCheck.GetProgress()));
+    }
+
+    /// <summary>Avance de la sincronización de la guía en curso (o de la última terminada).</summary>
+    /// <returns>Fase, paso actual y total.</returns>
+    [HttpGet("epg/sync/status")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public IActionResult GetEpgSyncStatus()
+    {
+        var plugin = Plugin.Instance;
+        return plugin is null ? StatusCode(500, new { error = "Plugin no inicializado" }) : Ok(ProgressDto(plugin.EpgFilter.GetProgress()));
+    }
+
+    // Jellyfin serializa los registros en PascalCase; el panel lee estos nombres en camelCase.
+    private static object ProgressDto(TaskProgress p) => new
+    {
+        running = p.Running,
+        phase = p.Phase,
+        detail = p.Detail,
+        done = p.Done,
+        total = p.Total,
+        startedAt = p.StartedAt,
+        finishedAt = p.FinishedAt,
+        summary = p.Summary,
+    };
 
     // ── EPG LOCAL ─────────────────────────────────────────────────────────────
     // La guía XMLTV la genera el propio plugin y la sirve aquí; el usuario
@@ -1259,6 +1301,11 @@ public class JellyTVController : ControllerBase
         if (plugin is null)
         {
             return StatusCode(500, new { error = "Plugin no inicializado" });
+        }
+
+        if (plugin.EpgFilter.IsRunning)
+        {
+            return Conflict(new { error = "Ya hay una sincronización en curso" });
         }
 
         if (clean)

@@ -11,6 +11,12 @@ public sealed class IdentityCandidate
     /// <summary>Gets or sets the iptv-org database id.</summary>
     public string? IptvOrgId { get; set; }
 
+    /// <summary>
+    /// Gets or sets the id that matches the channel with its guide: the iptv-org id, or the channel id declared by a local guide
+    /// (Pluto, Samsung, Plex and Tubi publish their own ids instead of a tvg-id).
+    /// </summary>
+    public string? TvgId { get; set; }
+
     /// <summary>Gets or sets the country code.</summary>
     public string? Country { get; set; }
 

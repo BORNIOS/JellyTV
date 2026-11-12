@@ -108,6 +108,11 @@
   #JellyTVConfigPage .jt-sort-ind{opacity:.35;font-size:.8em}
   #JellyTVConfigPage th[data-sort]{cursor:pointer;user-select:none}
   #JellyTVConfigPage th[data-sort]:hover{color:var(--jt-text)}
+  #JellyTVConfigPage .jt-progress{height:22px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid var(--jt-border-soft);overflow:hidden;margin-top:12px}
+  #JellyTVConfigPage .jt-progress-bar{height:100%;width:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:.72rem;font-weight:700;white-space:nowrap;border-radius:999px;background:linear-gradient(135deg,#246fd0,var(--jt-accent-2));transition:width .4s ease}
+  #JellyTVConfigPage .jt-progress.indet .jt-progress-bar{width:35%;animation:jt-indet 1.2s ease-in-out infinite}
+  @keyframes jt-indet{0%{margin-left:-35%}100%{margin-left:100%}}
+  @media (prefers-reduced-motion:reduce){#JellyTVConfigPage .jt-progress-bar{transition:none}#JellyTVConfigPage .jt-progress.indet .jt-progress-bar{animation:none;width:100%;opacity:.5}}
   #JellyTVConfigPage .jt-status{min-height:1em;font-size:.82rem;margin-top:8px;color:var(--jt-muted)}
 
   /* ── Badges ─────────────────────────────────────────────────────────── */
@@ -286,7 +291,7 @@
 }
 
 /* ── Barra de pestañas proporcionada, ajustes en tarjetas fluidas y avisos ── */
-#JellyTVConfigPage .jt-tabbar{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;padding:5px;margin-bottom:20px;overflow:visible}
+#JellyTVConfigPage .jt-tabbar{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;padding:5px;margin-bottom:20px;overflow:visible}
 #JellyTVConfigPage .jt-tab-btn{min-height:40px!important;width:100%;padding:0 12px!important;font-size:.9rem!important;font-weight:600;white-space:nowrap}
 #JellyTVConfigPage .jt-tab-btn:hover{transform:none;background:rgba(116,182,255,.1)!important}
 #JellyTVConfigPage .jt-tab-btn[aria-selected="true"]:hover{background:linear-gradient(135deg,#246fd0,var(--jt-accent-2))!important}
@@ -331,7 +336,6 @@
       <div class="jt-tabbar" role="tablist" aria-label="Secciones de JellyTV">
         <button type="button" class="jt-tab-btn emby-button" data-tab="overview" role="tab" aria-selected="true" aria-controls="jt-tab-overview"><span aria-hidden="true">◫</span><span class="jt-tab-label">Resumen</span></button>
         <button type="button" class="jt-tab-btn emby-button" data-tab="channels" role="tab" aria-selected="false" aria-controls="jt-tab-channels"><span aria-hidden="true">▤</span><span class="jt-tab-label">Canales</span></button>
-        <button type="button" class="jt-tab-btn emby-button" data-tab="health" role="tab" aria-selected="false" aria-controls="jt-tab-health"><span aria-hidden="true">♥</span><span class="jt-tab-label">Salud</span></button>
         <button type="button" class="jt-tab-btn emby-button" data-tab="epg" role="tab" aria-selected="false" aria-controls="jt-tab-epg"><span aria-hidden="true">▦</span><span class="jt-tab-label">Guía EPG</span></button>
         <button type="button" class="jt-tab-btn emby-button" data-tab="proxies" role="tab" aria-selected="false" aria-controls="jt-tab-proxies"><span aria-hidden="true">⇄</span><span class="jt-tab-label">Proxies</span></button>
         <button type="button" class="jt-tab-btn emby-button" data-tab="settings" role="tab" aria-selected="false" aria-controls="jt-tab-settings"><span aria-hidden="true">⚙</span><span class="jt-tab-label">Ajustes</span></button>
@@ -342,6 +346,22 @@
         <!-- ══ RESUMEN ═══════════════════════════════════════════════════ -->
         <div id="jt-tab-overview" class="jt-tab-content active" role="tabpanel">
           <div class="jt-grid-cards" id="channelDash"></div>
+
+          <div class="jt-card">
+            <div class="jt-card-head">
+              <div>
+                <h2>Salud de canales</h2>
+                <div class="jt-muted jt-small">Comprueba cada fuente de cada canal, también la de los canales apagados, para saber si ya puedes encenderlos. Los canales caídos se apagan solos y vuelven cuando responden.</div>
+              </div>
+              <div class="jt-toolbar" style="margin:0;">
+                <button id="btnScanChannels" is="emby-button" type="button" class="raised button-submit emby-button"><span>Verificar salud</span></button>
+                <button id="btnRefreshChannels" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Actualizar canales en Jellyfin</span></button>
+              </div>
+            </div>
+            <div id="healthProgress" class="jt-progress" style="display:none;"><div id="healthProgressBar" class="jt-progress-bar"></div></div>
+            <div id="healthProgressText" class="jt-status"></div>
+            <div id="healthOffReady" class="jt-small"></div>
+          </div>
 
           <div class="jt-card">
             <div class="jt-card-head">
@@ -364,7 +384,6 @@
             </div>
             <div class="jt-toolbar">
               <button type="button" class="raised button-submit emby-button" data-goto-tab="channels"><span>Gestionar canales</span></button>
-              <button type="button" class="raised emby-button jt-secondary" data-goto-tab="health"><span>Ver salud</span></button>
               <button type="button" class="raised emby-button jt-secondary" data-goto-tab="epg"><span>Sincronizar guía</span></button>
             </div>
           </div>
@@ -421,29 +440,6 @@
           </div>
         </div>
 
-        <!-- ══ SALUD ═════════════════════════════════════════════════════ -->
-        <div id="jt-tab-health" class="jt-tab-content" role="tabpanel">
-          <div class="jt-card">
-            <div class="jt-card-head">
-              <div>
-                <h2>Salud de canales</h2>
-                <div class="jt-muted jt-small">Verificación real del stream (ffmpeg o descarga de datos) y estado por fuente.</div>
-              </div>
-            </div>
-            <div class="jt-toolbar">
-              <button id="btnScanChannels" is="emby-button" type="button" class="raised button-submit emby-button"><span>Verificar salud</span></button>
-              <button id="btnRefreshChannels" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Actualizar canales en Jellyfin</span></button>
-            </div>
-            <div class="jt-tableWrap">
-              <table class="jt-table">
-                <thead><tr><th>Canal</th><th>Estado</th><th>Comprobado</th><th>Detalle</th><th>Acciones</th></tr></thead>
-                <tbody id="healthTableBody"></tbody>
-              </table>
-            </div>
-            <div id="healthStatus" class="jt-status"></div>
-          </div>
-        </div>
-
         <!-- ══ GUÍA EPG ══════════════════════════════════════════════════ -->
         <div id="jt-tab-epg" class="jt-tab-content" role="tabpanel">
           <div class="jt-card">
@@ -459,6 +455,8 @@
               <code class="jt-url" id="epgUrlDisplay"></code>
               <button id="btnCopyEpg" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Copiar URL</span></button>
             </div>
+            <div id="epgProgress" class="jt-progress" style="display:none;margin-top:12px;"><div id="epgProgressBar" class="jt-progress-bar"></div></div>
+            <div id="epgProgressText" class="jt-status"></div>
             <div id="epgSourceList"></div>
             <div id="epgStatus" class="jt-status"></div>
           </div>
@@ -833,7 +831,7 @@
       },
       init: function(){
           var self = this;
-          ['healthTableBody', 'epgCoverageBody', 'proxiesTableBody'].forEach(function(id){ self.enhanceGrid(id); });
+          ['epgCoverageBody', 'proxiesTableBody'].forEach(function(id){ self.enhanceGrid(id); });
           document.querySelector('#JellyTVConfigPage').addEventListener('pageshow', function(){
               Dashboard.showLoadingMsg();
               ApiClient.getPluginConfiguration(self.pluginId).then(function(cfg){
@@ -843,6 +841,7 @@
                   self.config.EpgSources = self.config.EpgSources || [];
                   self.renderAll();
                   Dashboard.hideLoadingMsg();
+                  self.resumeProgress();
               });
           });
 
@@ -921,12 +920,13 @@
           if(btnDetectTz) btnDetectTz.addEventListener('click', function(){ self.useMyTimezone(); });
           document.getElementById('btnCopyTuner').addEventListener('click', function(){ self.copy(self.tunerUrl()); });
           document.getElementById('btnScanChannels').addEventListener('click', function(){
-              self.confirm('Verificar la salud de los canales', 'Se comprobar\u00E1 cada fuente de cada canal. Los canales ca\u00EDdos se desactivan solos. Puede tardar unos minutos.', function(){
-                  Dashboard.showLoadingMsg();
+              self.confirm('Verificar la salud de los canales', 'Se comprobar\u00E1 cada fuente de cada canal, tambi\u00E9n las de los canales apagados (sin encenderlos). Los canales ca\u00EDdos se desactivan solos. Puede tardar unos minutos.', function(){
                   ApiClient.ajax({type:'POST',url:'/JellyTV/health-check'}).then(function(){
-                      Dashboard.hideLoadingMsg();
-                      JellyTV.notify('Verificaci\u00F3n iniciada. Refresca la p\u00E1gina en unos minutos.','ok');
-                  },function(){Dashboard.hideLoadingMsg(); JellyTV.notify('No se pudo iniciar la verificaci\u00F3n.','err');});
+                      self.trackHealth();
+                  },function(e){
+                      if(e && e.status === 409){ JellyTV.notify('Ya hay una revisi\u00F3n en curso.','warn'); self.trackHealth(); return; }
+                      JellyTV.notify('No se pudo iniciar la verificaci\u00F3n.','err');
+                  });
               }, 'Verificar');
           });
           var chCat = document.getElementById('chCatFilter');
@@ -958,7 +958,7 @@
           this.renderDashboard();
           this.renderOverview();
           this.renderChannelTable();
-          this.renderHealthTable();
+          this.renderOffReady();
           this.renderProxyTable();
           this.renderEpgList();
           this.renderSettings();
@@ -1005,27 +1005,75 @@
           box.innerHTML = html;
       },
 
-      renderHealthTable: function(){
-          var ch = this.config.Channels || [];
-          var h = '';
-          if(!ch.length){
-              h = '<tr><td colspan="5" class="jt-empty">No hay canales configurados.</td></tr>';
-          } else {
-              ch.forEach(function(c){
-                  var st = c.LastCheckAlive === true ? '<span class="jt-badge jt-badge-green">Vivo</span>'
-                      : c.LastCheckAlive === false ? '<span class="jt-badge jt-badge-red">Caído</span>'
-                      : '<span class="jt-badge jt-badge-gray">Sin datos</span>';
-                  var when = c.LastCheckedAt ? new Date(c.LastCheckedAt).toLocaleString() : '—';
-                  h += '<tr>';
-                  h += '<td><strong>'+JellyTV.esc(c.Name)+'</strong><div class="jt-small jt-muted">'+JellyTV.esc(c.Category||'')+'</div></td>';
-                  h += '<td>'+st+'</td>';
-                  h += '<td class="jt-small" data-v="'+(c.LastCheckedAt ? new Date(c.LastCheckedAt).getTime() : 0)+'">'+when+'</td>';
-                  h += '<td class="jt-small jt-muted">'+JellyTV.esc(c.LastCheckError || '—')+'</td>';
-                  h += '<td><div class="jt-actions"><button is="emby-button" type="button" class="raised emby-button jt-secondary" onclick="JellyTV.openChannelModal(\''+c.Id+'\')"><span>Editar</span></button></div></td>';
-                  h += '</tr>';
-              });
-          }
-          document.getElementById('healthTableBody').innerHTML = h;
+      // Canales apagados por el usuario cuya última revisión salió viva: ya se pueden encender.
+      renderOffReady: function(){
+          var box = document.getElementById('healthOffReady');
+          if(!box) return;
+          var ready = (this.config.Channels || []).filter(function(c){ return !c.IsEnabled && !c.AutoDisabled && c.LastCheckAlive === true; });
+          box.innerHTML = ready.length
+              ? '<span style="color:var(--jt-good)">✓ ' + ready.length + ' canal(es) apagado(s) ya responde(n) y se puede(n) encender:</span> ' + ready.map(function(c){ return JellyTV.esc(c.Name); }).join(', ') + '.'
+              : '';
+      },
+
+      // Sigue en vivo una tarea larga del servidor y pinta su barra con el avance real que reporta.
+      trackProgress: function(o){
+          var self = this;
+          var wrap = document.getElementById(o.box), bar = document.getElementById(o.bar), txt = document.getElementById(o.text);
+          if(!wrap || !bar || !txt || this['_track_' + o.box]){ return; }
+          this['_track_' + o.box] = true;
+          var finish = function(){ self['_track_' + o.box] = false; };
+          var tick = function(){
+              ApiClient.getJSON(ApiClient.getUrl(o.url)).then(function(p){
+                  if(p.running){
+                      o.fresh = true; // si lo vimos correr, al terminar toca refrescar y avisar
+                      var known = p.total > 0, pct = known ? Math.min(100, Math.round(p.done * 100 / p.total)) : 0;
+                      wrap.style.display = '';
+                      wrap.classList.toggle('indet', !known);
+                      bar.style.width = known ? pct + '%' : '';
+                      bar.textContent = known && pct >= 8 ? pct + ' %' : '';
+                      txt.textContent = o.label(p, pct);
+                      setTimeout(tick, 1200);
+                      return;
+                  }
+                  finish();
+                  if(o.fresh){
+                      bar.style.width = '100%';
+                      bar.textContent = '100 %';
+                      wrap.classList.remove('indet');
+                      setTimeout(function(){ wrap.style.display = 'none'; }, 2500);
+                  } else {
+                      wrap.style.display = 'none';
+                  }
+                  var when = p.finishedAt ? new Date(p.finishedAt).toLocaleString() : '';
+                  txt.textContent = p.finishedAt ? (o.fresh ? 'Terminada' : 'Última ejecución') + ' (' + when + '): ' + (p.summary || 'sin datos') + '.' : '';
+                  if(o.fresh && o.done){ o.done(p); }
+              }, finish);
+          };
+          tick();
+      },
+
+      trackHealth: function(fresh){
+          var self = this;
+          this.trackProgress({
+              url: 'JellyTV/health-check/status', box: 'healthProgress', bar: 'healthProgressBar', text: 'healthProgressText', fresh: fresh !== false,
+              label: function(p, pct){ return p.total ? 'Comprobando fuentes: ' + p.done + ' de ' + p.total + ' (' + pct + ' %)' : 'Preparando la revisión…'; },
+              done: function(){ self.reloadConfig(); }
+          });
+      },
+
+      trackEpg: function(fresh){
+          var self = this;
+          this.trackProgress({
+              url: 'JellyTV/epg/sync/status', box: 'epgProgress', bar: 'epgProgressBar', text: 'epgProgressText', fresh: fresh !== false,
+              label: function(p, pct){ return (p.total ? 'Paso ' + Math.min(p.done + 1, p.total) + ' de ' + p.total + ' (' + pct + ' %) · ' : '') + p.phase + (p.detail ? ': ' + p.detail : '…'); },
+              done: function(){ self.reloadConfig(function(){ self.loadEpgCoverage(); }); }
+          });
+      },
+
+      // Al abrir el panel: si hay una tarea corriendo se engancha a ella; si no, muestra el resultado de la última.
+      resumeProgress: function(){
+          this.trackHealth(false);
+          this.trackEpg(false);
       },
 
       switchTab: function(name){
@@ -1046,7 +1094,7 @@
           var msg = '';
           var tone = '';
           if(!total){ msg = 'Aún no hay canales configurados. Empieza en la pestaña Canales.'; }
-          else if(dead > 0){ msg = dead + ' canal(es) caído(s) de ' + total + '. Revisa la pestaña Salud.'; tone = 'warn'; }
+          else if(dead > 0){ msg = dead + ' canal(es) caído(s) de ' + total + '. Revisa la columna Salud en Canales.'; tone = 'warn'; }
           else if(alive > 0){ msg = 'Todos los canales comprobados están vivos (' + alive + '/' + total + ').'; tone = 'ok'; }
           else { msg = 'Hay ' + total + ' canal(es) sin comprobación de salud.'; }
           if(total && !epg){ msg += ' No hay fuentes EPG habilitadas.'; tone = tone || 'warn'; }
@@ -1194,7 +1242,7 @@
               ch.forEach(function(c){
                   var types=['Directo','FAST','Tokenizado'];
                   var typeBadges=['jt-badge-green','jt-badge-blue','jt-badge-yellow'];
-                  var health = c.LastCheckAlive===true?'<span class="jt-badge jt-badge-green">Vivo</span>':
+                  var health = c.LastCheckAlive===true?(!c.IsEnabled&&!c.AutoDisabled?'<span class="jt-badge jt-badge-green" title="Responde: ya puedes encenderlo">Vivo · ya puede encenderse</span>':'<span class="jt-badge jt-badge-green">Vivo</span>'):
                                c.LastCheckAlive===false?'<span class="jt-badge jt-badge-red">Caído</span>':
                                '<span class="jt-badge jt-badge-gray">—</span>';
                   var status = c.IsEnabled?'<span class="jt-badge jt-badge-green">ON</span>':'<span class="jt-badge jt-badge-gray">OFF</span>';
@@ -1245,7 +1293,7 @@
           var box = document.getElementById('chIdResults');
           if(!name){ self.notify('Escribe primero el nombre del canal.','warn'); return; }
           box.className = 'jt-id-results open';
-          box.innerHTML = '<div class="jt-id-empty">Buscando en iptv-org…</div>';
+          box.innerHTML = '<div class="jt-id-empty">Buscando en iptv-org y en las guías locales…</div>';
           var country = self.modalIdentity && self.modalIdentity.Country ? '&country=' + encodeURIComponent(self.modalIdentity.Country) : '';
           var tvg = document.getElementById('chTvgId').value.trim(); if(tvg) country += '&tvgId=' + encodeURIComponent(tvg);
           ApiClient.ajax({ type:'GET', url:'/JellyTV/identity/search?q=' + encodeURIComponent(name) + country, dataType:'json' }).then(function(list){
@@ -1261,7 +1309,7 @@
               box.querySelectorAll('.jt-id-item').forEach(function(el){
                   el.addEventListener('click', function(){ self.pickIdentity(parseInt(el.dataset.i, 10)); });
               });
-          }, function(){ box.innerHTML = '<div class="jt-id-empty">No se pudo consultar iptv-org.</div>'; });
+          }, function(){ box.innerHTML = '<div class="jt-id-empty">No se pudo validar la identidad.</div>'; });
       },
       pickIdentity: function(i){
           var c = (this._idCandidates || [])[i];
@@ -1270,7 +1318,8 @@
           var logo = document.getElementById('chLogoUrl');
           if(c.LogoUrl && !logo.value.trim()) logo.value = c.LogoUrl;
           var tvg = document.getElementById('chTvgId');
-          if(c.IptvOrgId && !tvg.value.trim()) tvg.value = c.IptvOrgId;
+          var guideId = c.TvgId || c.IptvOrgId;
+          if(guideId && !tvg.value.trim()) tvg.value = guideId;
           var cs = document.getElementById('chCountry');
           var code = c.Country ? String(c.Country).toUpperCase() : '';
           if(cs && !cs.value && code && cs.querySelector('option[value="' + code + '"]')) cs.value = code;
@@ -1798,45 +1847,14 @@
           var self = this;
           var anySource = (this.config.EpgSources||[]).some(function(s){ return s.IsEnabled && s.Url; });
           var anyOwn = (this.config.Channels||[]).some(function(c){ return c.IsEnabled && c.EpgPageUrl; });
-          if(!anySource && !anyOwn){ JellyTV.notify('No hay fuentes EPG habilitadas ni canales con guía propia.','warn'); return; }
-          this._epgSyncStart = Date.now();
-          // Limpiar estados previos para detectar con precisión cuándo termina el sync.
-          (this.config.EpgSources||[]).forEach(function(s){ s.LastSyncSummary = null; s.LastSyncError = null; });
-          this.renderEpgList();
-          Dashboard.showLoadingMsg();
+          var auto = this.config.AutoGuideEnabled !== false;
+          if(!anySource && !anyOwn && !auto){ JellyTV.notify('No hay fuentes EPG habilitadas ni canales con guía propia.','warn'); return; }
           ApiClient.ajax({type:'POST',url:'/JellyTV/epg/sync' + (clean === true ? '?clean=true' : '')}).then(function(){
-              Dashboard.hideLoadingMsg();
-              JellyTV.notify('Sincronización iniciada en segundo plano. Puede tardar unos minutos.','ok');
-              self.pollEpgStatus(20);
+              self.trackEpg();
           }, function(e){
-              Dashboard.hideLoadingMsg();
+              if(e && e.status === 409){ JellyTV.notify('Ya hay una sincronización en curso.','warn'); self.trackEpg(); return; }
               JellyTV.notify('Error al iniciar la sincronización (HTTP '+(e && e.status || '?')+').','err');
           });
-      },
-      pollEpgStatus: function(tries){
-          var self = this;
-          var statusEl = document.getElementById('epgStatus');
-          if(tries <= 0){ if(statusEl) statusEl.textContent = 'Comprobación terminada; revisa el estado de cada fuente.'; return; }
-          if(statusEl) statusEl.textContent = 'Sincronizando guía… (' + tries + ' comprobaciones restantes)';
-          setTimeout(function(){
-              ApiClient.getJSON(ApiClient.getUrl('JellyTV/epg/coverage')).then(function(d){
-                  if(self._epgSyncStart && d && d.guideUpdatedAt && new Date(d.guideUpdatedAt).getTime() > self._epgSyncStart){
-                      if(statusEl) statusEl.textContent = 'Sincronización completada. Recarga Jellyfin para ver la guía.';
-                      self.renderEpgCoverage(d);
-                      self.reloadConfig();
-                      self._epgSyncStart = 0;
-                  }
-              }, function(){});
-              self.reloadConfig(function(){
-                  if(!self._epgSyncStart){ return; }
-                  var srcs = self.config.EpgSources || [];
-                  var withError = srcs.some(function(s){ return s.IsEnabled && s.LastSyncError; });
-                  var done = srcs.some(function(s){ return s.IsEnabled && s.LastSyncSummary; });
-                  if(withError){ if(statusEl) statusEl.textContent = 'La sincronización terminó con errores (revisa cada fuente).'; return; }
-                  if(done){ if(statusEl) statusEl.textContent = 'Sincronización completada. Recarga Jellyfin para ver la guía.'; self.loadEpgCoverage(); return; }
-                  self.pollEpgStatus(tries - 1);
-              });
-          }, 6000);
       },
       reloadConfig: function(cb){
           var self = this;

@@ -82,8 +82,8 @@ If you subscribe to internet TV services (IPTV), every channel is a web address,
 ### Option B — Manual
 
 1. Download the latest version from [**Releases**](https://github.com/BORNIOS/JellyTV/releases).
-2. Extract the `JellyTV_1.0.0` folder (contains `Jellyfin.Plugin.JellyTV.dll`) into your
-   installation's plugins directory.
+2. Create a `JellyTV` folder inside your installation's plugins directory and extract the ZIP there
+   (it contains only `Jellyfin.Plugin.JellyTV.dll`).
 3. Restart Jellyfin.
 4. Go to **Dashboard → Plugins → JellyTV** and add your channels.
 
@@ -99,10 +99,9 @@ Under **Dashboard → Plugins → JellyTV** everything is managed with tabs:
 
 | Tab | What is there |
 |---|---|
-| **Overview** | General status and *Quick access*: copy the M3U playlist and the guide URL |
+| **Overview** | General status, **channel health** (manual check with a progress bar, includes switched-off channels) and *Quick access*: copy the M3U playlist and the guide URL; diagnostics (sessions and log) |
 | **Channels** | Channel table and per-channel editor: name, type, **backup sources**, logo, `tvg-id`, country, category, User-Agent and headers, identity and own guide |
-| **Health** | Status of each channel and of **each source**, manual check and diagnostics (sessions and log) |
-| **EPG guide** | XMLTV sources, sync, per-channel coverage and which source was each channel's primary |
+| **EPG guide** | XMLTV sources, sync with a progress bar, per-channel coverage and which source was each channel's primary |
 | **Proxies** | Proxies by country, with status |
 | **Settings** | How channels reach Live TV, public URL, User-Agent, TMDB, automatic guide, HTML guide recipes, time zone, scheduled tasks and storage |
 
@@ -136,6 +135,7 @@ Example: `https://gateway.example/online.php?stream=channel` returns HTML with a
 |---|---|---|
 | **Direct** | Provider URL | Real Direct Play: no relay, no remux |
 | **Direct with exit country** | Relay (through a proxy of that country) | The device cannot reach the blocked origin |
+| **Direct with a huge DVR window** | Relay (trimmed to ~60 s of live) | Some providers publish hours of DVR (e.g. 12 h = 10,800 segments, ~460 KB per reload) and browsers start slowly. It is detected by the health check: until one runs, the channel stays direct |
 | **Tokenized** (session or ephemeral) | Relay | The provider ties the token to the IP that requested it (the server); a client with another IP would get 403 |
 | **FAST** | Relay with cleaning | Beacons and ads are stripped and the DVR window is trimmed |
 
@@ -175,6 +175,7 @@ The mode is selected in **Settings → How channels reach Live TV**.
 Each channel can be identified in the [public iptv-org database](https://github.com/iptv-org/database) (Unlicense; covers TV, web and FAST channels). With the identity the plugin **fills whatever the channel lacks**: country, `tvg-id`, logo and website. It never overwrites what you typed.
 
 - **Search identity** (channel form) proposes candidates. If the channel's `tvg-id` matches a database id (e.g. `ESPN.us`), that match wins.
+- **Your local guides count as candidates too.** Pluto, Samsung, Plex or Tubi do not use a `tvg-id` but their own channel id: when the guide syncs, the plugin saves the channel list of every source you added by hand, and *Search identity* offers them with their logo ("guide Plex"). Picking one copies its id into the channel's `tvg-id`. Nothing is applied automatically.
 - **Complete identity and logos** (Channels tab) does it in bulk and only applies exact matches; if the name exists in several countries (e.g. `ESPN` in US, BR, AU) and the channel has no country, it **does not guess** and leaves it untouched. Anything you confirm by hand is never overwritten.
 - The iptv-org data is three public JSON files (`channels.json`, `logos.json` and `guides.json`, about 5 MB downloaded compressed, ≈40 MB uncompressed) that only describe channels; they **contain no programme listings** (those come from the guide, below). The plugin keeps a reduced copy as a cache in **Jellyfin's cache folder** (`<cache>/JellyTV/iptvorg.json`) for 7 days, so it is not downloaded on every use. It is disposable (if deleted it is downloaded again on its own) and independent of the storage backend (PostgreSQL or JSON). No keys are needed.
 
@@ -284,8 +285,8 @@ does **not** renew it proactively; if the provider answers 401/403 it asks for i
 <summary><b>A channel has several sources — which one is used?</b></summary>
 
 The first enabled source the health check marks as alive. If a source fails when the channel is opened,
-the plugin tries the next one and remembers the one that worked. The **Health** tab shows which source is
-alive and which is down (with its last error). If all are down, the channel is marked as down.
+the plugin tries the next one and remembers the one that worked. The **Health** column in the Channels tab and the
+channel editor show which source is alive and which is down (with its last error). If all are down, the channel is marked as down.
 </details>
 
 <details>

@@ -70,7 +70,7 @@ public class ChannelHealthCheckTask : IScheduledTask
                 StringComparer.Ordinal);
 
             var (alive, dead, sourcesChecked, sourcesAlive) = await healthCheck
-                .CheckConfiguredChannelsAsync("scheduled", config.Channels, cancellationToken)
+                .CheckConfiguredChannelsAsync("scheduled", config.Channels, ct: cancellationToken)
                 .ConfigureAwait(false);
 
             try
