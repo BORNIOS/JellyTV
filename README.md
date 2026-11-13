@@ -244,11 +244,11 @@ Los canales, proxies y fuentes EPG se guardan en un backend seleccionable desde 
 
 | Backend | Cuándo usarlo |
 |---|---|
-| **Automático** (por defecto) | Usa PostgreSQL si el plugin **PostgreSQL Database Provider** está instalado; si no, archivos JSON |
-| **PostgreSQL** | Fuerza el esquema privado `jellytv_<guid>` del PG Provider (nunca toca `public`); si no está disponible, cae a JSON |
+| **Automático** (por defecto) | Usa PostgreSQL si el plugin [**PostgreSQL Database Provider**](https://github.com/BORNIOS/Jellyfin-Database-Providers-Postgres) está instalado; si no, archivos JSON |
+| **PostgreSQL** | Fuerza el esquema privado `jellytv_<guid>` del [PG Provider](https://github.com/BORNIOS/Jellyfin-Database-Providers-Postgres) (nunca toca `public`); si no está disponible, cae a JSON |
 | **Archivos JSON** | Fuerza `channels.json`, `proxies.json` y `epg-sources.json` en la carpeta de datos; no requiere instalar nada más |
 
-La carpeta JSON se puede cambiar con **Carpeta de archivos JSON** (solo rutas absolutas; una relativa se ignora). Con **Escribir copia JSON aunque PostgreSQL esté activo** el plugin mantiene además una copia legible de los mismos datos, útil para migrar o volver a archivos sin depender de PG Provider.
+La carpeta JSON se puede cambiar con **Carpeta de archivos JSON** (solo rutas absolutas; una relativa se ignora). Con **Escribir copia JSON aunque PostgreSQL esté activo** el plugin mantiene además una copia legible de los mismos datos, útil para migrar o volver a archivos sin depender del [PG Provider](https://github.com/BORNIOS/Jellyfin-Database-Providers-Postgres).
 
 La configuración XML del plugin se mantiene como espejo, así que cambiar de backend no pierde datos: al arrancar se hidrata desde el backend activo y, si está vacío, se siembra desde la configuración XML. El cambio de backend se aplica al reiniciar Jellyfin.
 
