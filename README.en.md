@@ -43,6 +43,8 @@ If you subscribe to internet TV services (IPTV), every channel is a web address,
 - 🎬 **Optional TMDB enrichment** — titles, descriptions and year for the programmes in your guide.
 - 📋 **M3U playlist for external apps** (IPTV Smarters, IPVIO, VLC…) always through the relay, with a copy button.
 - 🧩 **Optional proxies** — for providers that block your IP or country-restricted channels.
+- 📚 **FAST provider catalog** — imports channels from Pluto TV, Plex, Tubi and Runtime straight from their API; a channel you already have is added as a backup.
+- 🌐 **Spanish and English panel** — follows your Jellyfin user language.
 - 🖥️ **Admin panel** — tables with search and sorting (alphabetical by default), per-channel editor, health, guide coverage, diagnostics and log.
 
 ---
@@ -99,8 +101,9 @@ Under **Dashboard → Plugins → JellyTV** everything is managed with tabs:
 
 | Tab | What is there |
 |---|---|
-| **Overview** | General status, **channel health** (manual check with a progress bar, includes switched-off channels) and *Quick access*: copy the M3U playlist and the guide URL; diagnostics (sessions and log) |
+| **Overview** | General status, **channel health** (manual check with a progress bar, includes switched-off channels; a switched-off channel found alive is turned on automatically) and *Quick access*: copy the M3U playlist and the guide URL; diagnostics (sessions and log) |
 | **Channels** | Channel table and per-channel editor: name, type, **backup sources**, logo, `tvg-id`, country, category, User-Agent and headers, identity and own guide |
+| **Catalog** | **Pluto TV, Plex, Tubi and Runtime** channels queried straight from each provider, in one accordion per provider so you tick only the ones you want to import |
 | **EPG guide** | XMLTV sources, sync with a progress bar, per-channel coverage and which source was each channel's primary |
 | **Proxies** | Proxies by country, with status |
 | **Settings** | How channels reach Live TV, public URL, User-Agent, TMDB, automatic guide, HTML guide recipes, time zone, scheduled tasks and storage |
@@ -169,6 +172,28 @@ Besides the native service, JellyTV exposes an M3U playlist and an XMLTV guide f
 The mode is selected in **Settings → How channels reach Live TV**.
 
 ---
+
+## 📚 FAST provider catalog
+
+The **Catalog** tab imports free channels (Pluto TV, Plex, Tubi and Runtime) **with no middlemen**: the plugin asks each provider through the same API its website uses, not third-party lists.
+
+1. Open a provider in the accordion: its catalog is fetched (remembered for 15 minutes).
+2. Tick the channels you want. Ones you already imported show as *Imported*, and ones whose name matches a channel you already have show as *You already have one like it* (many channels live in several providers).
+3. If a channel matches one you already have by name, ticking it changes its badge to **"Will be added as a backup"**: instead of creating another channel, the provider's one is added as a **backup source** of that channel, which keeps its main source, its guide and its identity.
+4. **Import**: each channel is created as **FAST** with its logo, category and `tvg-id` (the channel id at the provider). Each provider's categories are reduced to Jellyfin's (**Movies, Series, Kids, News, Sports**) plus **Music** and **General**, so the list does not fill up with micro categories, and the **provider's guide** is added to the EPG sources. Sync the guide to see the schedule.
+
+How they play: the channel does not store a URL with a token but an internal address (`jtv-provider://…`) that the plugin turns into the real URL **every time it opens the channel**, with its current token; if the provider rejects the token (401/403) it renews it. These channels' guide is also built from the provider's API.
+
+| Provider | How it is queried | Catalog |
+|---|---|---|
+| **Pluto TV** | `boot.pluto.tv` (session with a ~24 h JWT) and `service-channels.clusters.pluto.tv` | By IP (LATAM from Mexico) |
+| **Plex** | Anonymous token from `clients.plex.tv` and `epg.provider.plex.tv` | By IP (278 channels from Mexico) |
+| **Tubi** | `tubitv.com/live` and `oz/epg/programming`, no account | By IP: only a few channels from Mexico; the US one is much larger |
+| **Runtime** | Its website's API (`api-ott.runtime.tv`) with the public token the page gives every visitor; no account | ~40 linear channels of film, series and partners; some only in certain countries |
+
+- **Geoblocking:** the provider picks the catalog by the IP of whoever asks, that is, the server's. The *Query the catalogs from* selector uses an exit proxy of another country (**Proxies** tab); imported channels remember that exit country and download through that proxy.
+- These services' addresses and APIs are neither official nor stable: if a provider changes theirs, that provider stops working until the plugin is updated. The health check flags it.
+- Providers are added as code (one class per provider); Samsung TV Plus, LG Channels and Canela TV are not there yet. Roku and ViX were ruled out: their streams are DRM-encrypted (Widevine) and cannot go through the relay.
 
 ## 🪪 Channel identity (iptv-org)
 
@@ -242,6 +267,8 @@ The full model — tables, channel↔backup relations, indexes, failover flow an
 | `GET /JellyTV/segment?sid=…&url=…` | Segment proxy |
 | `GET /JellyTV/channels` | Channels health status *(admin)* |
 | `POST /JellyTV/health-check` | Manual background health check *(admin)* |
+| `GET /JellyTV/providers`, `/providers/{id}/channels` | Catalog providers and their channels *(admin)* |
+| `POST /JellyTV/providers/{id}/import` | Imports catalog channels; duplicates become backups *(admin)* |
 | `POST /JellyTV/refresh-guide` | Re-sync the EPG guide *(admin)* |
 | `GET /JellyTV/sessions`, `/log`, `/metrics` | Diagnostics *(admin)* |
 | `GET /JellyTV/storage` | Active storage backend *(admin)* |
@@ -324,12 +351,14 @@ dotnet build Jellyfin.Plugin.JellyTV.sln -c Release
 # Publish the DLL
 dotnet publish Jellyfin.Plugin.JellyTV/Jellyfin.Plugin.JellyTV.csproj -c Release -o publish
 
-# Regression tests (HLS, token extraction and guide matching)
+# Regression tests (HLS, tokens, guides, providers and panel i18n)
 dotnet run --project tests/JellyTV.HlsRegression -c Release -p:RunAnalyzers=false
 
 # Including a check against the real public services (needs network)
 dotnet run --project tests/JellyTV.HlsRegression -c Release -p:RunAnalyzers=false -- --live
 ```
+
+**Config panel.** It is written as pieces under `Jellyfin.Plugin.JellyTV/Configuration/Page/` (`page.html`, `page.css`, `i18n.js`, `app.js`) and the build joins them into the single `configPage.html` Jellyfin serves. Source text is Spanish; the English translations live in `i18n.js` and a regression test fails if one is missing.
 
 ---
 

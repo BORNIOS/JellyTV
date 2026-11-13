@@ -1,0 +1,23 @@
+{
+ "total_results": "2",
+ "objects": [
+  {
+   "id": "3270",
+   "name": "Runtime Español",
+   "short_description": "Disfruta de tus películas y series favoritas cuando quieras y totalmente gratis.",
+   "linear_channel_id": "3269",
+   "widescreen_thumbnail_url": "https://img2.static-ottera.com/prod/run/linear_channel/logo/360x180/runtime_ush_1920x1080_1.jpg",
+   "logo": "https://img.static-ottera.com/prod/run/linear_channel/logo/runtime_ush_1920x1080_1.jpg",
+   "video_type": "linear"
+  },
+  {
+   "id": "3485",
+   "name": "Runtime",
+   "short_description": "Disfruta de tus películas y series favoritas cuando quieras y totalmente gratis.",
+   "linear_channel_id": "3484",
+   "widescreen_thumbnail_url": "https://img2.static-ottera.com/prod/run/linear_channel/logo/360x180/runtime_ush_1920x1080_1.jpg",
+   "logo": "https://img.static-ottera.com/prod/run/linear_channel/logo/runtime_ush_1920x1080_1.jpg",
+   "video_type": "linear"
+  }
+ ]
+}

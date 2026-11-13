@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Services.Providers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
@@ -180,7 +181,7 @@ public class HlsRewriterService
 
                 // Solo los canales Tokenizado renuevan. Directo/FAST/Proxy:
                 // un 403 es terminal para el token actual, no se re-resuelve.
-                if (session.ChannelType != ChannelEntry.TokenizedType)
+                if (session.ChannelType != ChannelEntry.TokenizedType && !ProviderUrl.IsProviderUrl(session.UpstreamUrl))
                 {
                     PluginLog.Warn($"[HLS] Auth failure on non-tokenized channel (type={session.ChannelType}); not renewing.");
                     throw;

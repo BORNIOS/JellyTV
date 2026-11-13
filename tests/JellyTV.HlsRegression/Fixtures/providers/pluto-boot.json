@@ -1,0 +1,11 @@
+{
+ "servers": {
+  "channels": "https://service-channels.clusters.pluto.tv",
+  "stitcher": "https://cfd-v4-service-channel-stitcher-use1-1.prd.pluto.tv"
+ },
+ "session": {
+  "countryCode": "MX"
+ },
+ "stitcherParams": "appName=web&deviceId=00000000-0000-0000-0000-000000000000&sid=00000000-0000-0000-0000-000000000000",
+ "sessionToken": "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJpYXQiOiAxNzk0NDcyMjU1LCAiZXhwIjogMTc5NDU1ODY1NX0.firma-de-prueba"
+}

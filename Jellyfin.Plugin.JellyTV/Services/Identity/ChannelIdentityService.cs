@@ -125,7 +125,7 @@ public sealed class ChannelIdentityService : IDisposable
                     Website = channel.Website,
                     LogoUrl = channel.Logo,
                     Score = score,
-                    Sources = "iptvorg"
+                    Sources = "iptv-org"
                 });
             }
         }

@@ -1,0 +1,135 @@
+{
+ "MediaContainer": {
+  "title": "Plex Channels in MX",
+  "identifier": "tv.plex.provider.epg",
+  "size": 3,
+  "Channel": [
+   {
+    "art": "https://provider-static.plex.tv/epg/cms/production/51cfab43-caa2-40be-85ca-feec0cb84a85/Promo_Graphic_3840x2160_Alexis_FloresRDX.jpg",
+    "coverPoster": "https://provider-static.plex.tv/epg/cms/production/a640b78d-48ef-4130-b55a-5e8e2b797297/Promo_Graphic_2000x3000_Alexis_FloresRDX.jpg",
+    "genreRatingKeys": [
+     "genre_6171e01d4c451f5a44debdf6"
+    ],
+    "gridKey": "67db3546d66f778a752f7eaa",
+    "hidden": false,
+    "id": "608049aefa2b8ae93c2c3a63-67db3546d66f778a752f7eaa",
+    "isHd": false,
+    "language": "es",
+    "slug": "pelimex",
+    "summary": "Pelimex es el único en el mercado que te dejará vivir lo mejor del cine mexicano. Prepárate para ver las mejores películas y disfrutar de la cultura mexicana en tu pantalla.",
+    "thumb": "https://provider-static.plex.tv/epg/cms/production/fc750061-c748-4016-83e0-9f56a40a493c/Pelimex_red_logo_RDXC2.png",
+    "title": "PeliMex",
+    "vcn": "000",
+    "Media": [
+     {
+      "drm": false,
+      "container": "mpegts",
+      "protocol": "hls",
+      "optimizedForStreaming": true,
+      "videoCodec": "h264",
+      "Part": [
+       {
+        "container": "mpegts",
+        "id": "608049aefa2b8ae93c2c3a63-67db3546d66f778a752f7eaa",
+        "key": "/library/parts/608049aefa2b8ae93c2c3a63-67db3546d66f778a752f7eaa.m3u8",
+        "rafAdapter": "none",
+        "Stream": [
+         {
+          "codec": "eia_608",
+          "displayTitle": "English",
+          "id": "en",
+          "index": "0",
+          "language": "English",
+          "selected": false,
+          "streamIdentifier": "0",
+          "streamType": 3
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "art": "https://provider-static.plex.tv/epg/cms/production/c712705e-033d-4ea7-8548-8a224d041302/uno-hora_artwork_horizontal-01_-_James_Stowerdx.jpg",
+    "coverPoster": "https://provider-static.plex.tv/epg/cms/production/17518772-e574-488e-86e0-427591d32f5c/uno-hora_artwork_vertical-01_-_James_Stowerdx.jpg",
+    "genreRatingKeys": [
+     "genre_6a0c2728768cf9b31f6fe02a"
+    ],
+    "gridKey": "64693c3f4ead8fb86120d8db",
+    "hidden": false,
+    "id": "608049aefa2b8ae93c2c3a63-64693c3f4ead8fb86120d8db",
+    "isHd": false,
+    "language": "es",
+    "slug": "azteca-uno-1-hora",
+    "summary": "Azteca Uno is a channel for new audiences looking for the latest news, emotions, freshness, music and major events from Mexico.",
+    "thumb": "https://provider-static.plex.tv/epg/cms/production/a11b1ba3-d109-45ec-a87e-4312bad0682c/uno-hora_color_logodrx.png",
+    "title": "AZTECA UNO -1 hora",
+    "vcn": "000",
+    "Media": [
+     {
+      "drm": false,
+      "container": "mpegts",
+      "protocol": "hls",
+      "optimizedForStreaming": true,
+      "videoCodec": "h264",
+      "Part": [
+       {
+        "container": "mpegts",
+        "id": "608049aefa2b8ae93c2c3a63-64693c3f4ead8fb86120d8db",
+        "key": "/library/parts/608049aefa2b8ae93c2c3a63-64693c3f4ead8fb86120d8db.m3u8",
+        "rafAdapter": "none"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "art": "https://provider-static.plex.tv/epg/cms/production/51cfab43-caa2-40be-85ca-feec0cb84a85/Promo_Graphic_3840x2160_Alexis_FloresRDX.jpg",
+    "coverPoster": "https://provider-static.plex.tv/epg/cms/production/a640b78d-48ef-4130-b55a-5e8e2b797297/Promo_Graphic_2000x3000_Alexis_FloresRDX.jpg",
+    "genreRatingKeys": [
+     "genre_6171e01d4c451f5a44debdf6"
+    ],
+    "gridKey": "67db3546d66f778a752f7eaa",
+    "hidden": true,
+    "id": "hidden-channel",
+    "isHd": false,
+    "language": "es",
+    "slug": "pelimex",
+    "summary": "Pelimex es el único en el mercado que te dejará vivir lo mejor del cine mexicano. Prepárate para ver las mejores películas y disfrutar de la cultura mexicana en tu pantalla.",
+    "thumb": "https://provider-static.plex.tv/epg/cms/production/fc750061-c748-4016-83e0-9f56a40a493c/Pelimex_red_logo_RDXC2.png",
+    "title": "Oculto",
+    "vcn": "000",
+    "Media": [
+     {
+      "drm": false,
+      "container": "mpegts",
+      "protocol": "hls",
+      "optimizedForStreaming": true,
+      "videoCodec": "h264",
+      "Part": [
+       {
+        "container": "mpegts",
+        "id": "608049aefa2b8ae93c2c3a63-67db3546d66f778a752f7eaa",
+        "key": "/library/parts/608049aefa2b8ae93c2c3a63-67db3546d66f778a752f7eaa.m3u8",
+        "rafAdapter": "none",
+        "Stream": [
+         {
+          "codec": "eia_608",
+          "displayTitle": "English",
+          "id": "en",
+          "index": "0",
+          "language": "English",
+          "selected": false,
+          "streamIdentifier": "0",
+          "streamType": 3
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ }
+}

@@ -1,0 +1,117 @@
+{
+ "MediaContainer": {
+  "offset": 0,
+  "totalSize": 10,
+  "identifier": "tv.plex.provider.epg",
+  "size": 10,
+  "Metadata": [
+   {
+    "art": "https://partner-upload-assets.wurl.com/telecine_producciones/channel%2520POSTER%2520La%2520Mandragora1280x720px.jpg",
+    "guid": "plex://movie/6aef1ab1d2b18bd2b48f66a0",
+    "key": "/library/metadata/6aef1ab1d2b18bd2b48f66a0",
+    "ratingKey": "6aef1ab1d2b18bd2b48f66a0",
+    "summary": "Tres mujeres tendrán una refriega con un grupo de hombres que están afectando su negocio",
+    "type": "movie",
+    "contentRating": "TV-MA",
+    "duration": 4973000,
+    "originallyAvailableAt": "2012-10-21T00:00:00Z",
+    "skipParent": true,
+    "thumb": "https://provider-static.plex.tv/epg/cms/production/a640b78d-48ef-4130-b55a-5e8e2b797297/Promo_Graphic_2000x3000_Alexis_FloresRDX.jpg",
+    "title": "La Mandragora",
+    "userState": false,
+    "year": 2012,
+    "Image": [
+     {
+      "alt": "La Mandragora",
+      "type": "coverArt",
+      "url": "https://partner-upload-assets.wurl.com/telecine_producciones/channel%20POSTER%20La%20Mandragora1280x720px.jpg"
+     },
+     {
+      "alt": "La Mandragora",
+      "type": "coverPoster",
+      "url": "https://provider-static.plex.tv/epg/cms/production/a640b78d-48ef-4130-b55a-5e8e2b797297/Promo_Graphic_2000x3000_Alexis_FloresRDX.jpg"
+     }
+    ],
+    "Genre": [
+     {
+      "filter": "genre=6171e01d4c451f5a44debdf6",
+      "id": "6171e01d4c451f5a44debdf6",
+      "key": "/library/sections/home/all?genre=6171e01d4c451f5a44debdf6",
+      "ratingKey": "genre_6171e01d4c451f5a44debdf6",
+      "slug": "en-espanol",
+      "tag": "En Español",
+      "type": "directory",
+      "context": "tag.genre"
+     }
+    ],
+    "Media": [
+     {
+      "beginsAt": 1794437594,
+      "duration": 4973000,
+      "endsAt": 1794442567,
+      "id": "6aef1ab5d2b18bd2b48f66de",
+      "live": false,
+      "onAir": false,
+      "premiere": false,
+      "videoResolution": "720",
+      "origin": "livetv"
+     }
+    ]
+   },
+   {
+    "art": "https://partner-upload-assets.wurl.com/telecine_producciones/channel%2520POSTER%2520La%2520Mandragora1280x720px.jpg",
+    "guid": "plex://movie/6aef1ab1d2b18bd2b48f66a0",
+    "key": "/library/metadata/6aef1ab1d2b18bd2b48f66a0",
+    "ratingKey": "6aef1ab1d2b18bd2b48f66a0",
+    "summary": "Tres mujeres tendrán una refriega con un grupo de hombres que están afectando su negocio",
+    "type": "episode",
+    "contentRating": "TV-MA",
+    "duration": 4973000,
+    "originallyAvailableAt": "2012-10-21T00:00:00Z",
+    "skipParent": true,
+    "thumb": "https://provider-static.plex.tv/epg/cms/production/a640b78d-48ef-4130-b55a-5e8e2b797297/Promo_Graphic_2000x3000_Alexis_FloresRDX.jpg",
+    "title": "Episodio 1",
+    "userState": false,
+    "year": 2012,
+    "Image": [
+     {
+      "alt": "La Mandragora",
+      "type": "coverArt",
+      "url": "https://partner-upload-assets.wurl.com/telecine_producciones/channel%20POSTER%20La%20Mandragora1280x720px.jpg"
+     },
+     {
+      "alt": "La Mandragora",
+      "type": "coverPoster",
+      "url": "https://provider-static.plex.tv/epg/cms/production/a640b78d-48ef-4130-b55a-5e8e2b797297/Promo_Graphic_2000x3000_Alexis_FloresRDX.jpg"
+     }
+    ],
+    "Genre": [
+     {
+      "filter": "genre=6171e01d4c451f5a44debdf6",
+      "id": "6171e01d4c451f5a44debdf6",
+      "key": "/library/sections/home/all?genre=6171e01d4c451f5a44debdf6",
+      "ratingKey": "genre_6171e01d4c451f5a44debdf6",
+      "slug": "en-espanol",
+      "tag": "En Español",
+      "type": "directory",
+      "context": "tag.genre"
+     }
+    ],
+    "Media": [
+     {
+      "beginsAt": 1794437594,
+      "duration": 4973000,
+      "endsAt": 1794442567,
+      "id": "6aef1ab5d2b18bd2b48f66de",
+      "live": false,
+      "onAir": false,
+      "premiere": false,
+      "videoResolution": "720",
+      "origin": "livetv"
+     }
+    ],
+    "grandparentTitle": "Serie de prueba"
+   }
+  ]
+ }
+}

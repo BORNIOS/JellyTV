@@ -122,6 +122,25 @@ public class ChannelHealthCheckService
             }
         }
 
+        // Un canal de un proveedor guarda una dirección interna: se resuelve a la real y esa es la que se comprueba.
+        if (Providers.ProviderUrl.IsProviderUrl(channelUrl) && Plugin.Instance?.Providers is { } providers)
+        {
+            ChannelHealthStatus status;
+            try
+            {
+                var resolved = await providers.ResolveAsync(channelUrl, ct).ConfigureAwait(false);
+                status = await QuickCheckWithRetryAsync(channelName, resolved.FinalUrl, exitCountry, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                status = new ChannelHealthStatus { ChannelName = channelName, CheckedAt = DateTimeOffset.UtcNow, ErrorMessage = ex.Message };
+            }
+
+            status.ChannelUrl = channelUrl;
+            _healthCache[channelUrl] = (status, DateTimeOffset.UtcNow);
+            return status;
+        }
+
         // Direct (non-token) streams: quick HTTP check, no session resolution.
         if (channelType is ChannelEntry.DirectType or ChannelEntry.FastType)
         {
@@ -352,8 +371,9 @@ public class ChannelHealthCheckService
     /// <summary>
     /// Checks every enabled source of the given channels and applies the results to each source's
     /// health. Channels with no live source are auto-disabled; a channel that was auto-disabled is
-    /// re-enabled as soon as any of its sources comes back online. Channels the user switched off are checked too,
-    /// only to record whether they could be switched on again; their state is never changed. Mutates the passed channel list.
+    /// re-enabled as soon as any of its sources comes back online. A channel that is switched off but whose source answers is
+    /// switched on again, so a live channel never stays off. A channel none of whose sources produced a result (the run was
+    /// interrupted, for instance) keeps its state and is not counted as dead. Mutates the passed channel list.
     /// </summary>
     /// <param name="label">Name of the run, for the log.</param>
     /// <param name="channels">Channels to check.</param>
@@ -445,6 +465,7 @@ public class ChannelHealthCheckService
             }
 
             bool anyAlive = false;
+            bool anyResult = false;
             string? lastError = null;
             DateTimeOffset? lastChecked = null;
             foreach (var s in enabledSources)
@@ -454,6 +475,7 @@ public class ChannelHealthCheckService
                     continue;
                 }
 
+                anyResult = true;
                 s.LastCheckedAt = r.CheckedAt;
                 s.IsAlive = r.IsAlive;
                 s.LastError = r.IsAlive ? null : r.ErrorMessage;
@@ -471,6 +493,12 @@ public class ChannelHealthCheckService
                 lastChecked = r.CheckedAt;
             }
 
+            if (!anyResult)
+            {
+                // Nunca se comprobó (corrida interrumpida o sin resultado): no es un canal caído, se deja como estaba.
+                continue;
+            }
+
             ch.LastCheckedAt = lastChecked;
             ch.LastCheckError = lastError;
             ch.LastCheckAlive = enabledSources.Any(s => s.IsAlive == true) ? true : enabledSources.Any(s => s.IsAlive == false) ? false : null;
@@ -478,7 +506,7 @@ public class ChannelHealthCheckService
             if (anyAlive)
             {
                 channelsAlive++;
-                if (ch.AutoDisabled)
+                if (!ch.IsEnabled)
                 {
                     ch.AutoDisabled = false;
                     ch.IsEnabled = true;

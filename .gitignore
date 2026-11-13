@@ -52,3 +52,6 @@ artifacts/
 # Local secrets
 secrets.json
 .local.settings.json
+
+# Capturas de red de proveedores (traen IP y datos de sesión)
+*.har

@@ -1,0 +1,20 @@
+{
+ "total_results": "2",
+ "objects": [
+  {
+   "type": "news",
+   "segment_start_time": "1794507942",
+   "segment_end_time": "1794510000",
+   "name": "Emergencias - Episodio 06",
+   "short_description": "Situaciones de emergencias al límite.",
+   "parent_name": "Runtime Español"
+  },
+  {
+   "type": "news",
+   "segment_start_time": "1794510000",
+   "segment_end_time": "1794513600",
+   "name": "Otro programa",
+   "long_description": "Descripción larga."
+  }
+ ]
+}

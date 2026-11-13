@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"/><title>JellyTV</title></head>
+<body>
+<div id="JellyTVConfigPage"
+     data-role="page"
+     data-require="emby-input,emby-button,emby-select,emby-checkbox"
+     data-pluginuniqueid="f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c"
+     class="page type-interior pluginConfigurationPage">
+
+  <style>
+<!--@include page.css-->
+  </style>
+
+  <div data-role="content">
+    <div class="content-primary jt-shell">
+
+      <header class="jt-hero">
+        <div>
+          <h1 class="jt-title">JellyTV</h1>
+          <p class="jt-subtitle">Canales IPTV como proveedor de Live TV: relay HLS sin transcodificación, resolución de tokens y guía EPG local con enriquecimiento TMDB.</p>
+        </div>
+      </header>
+
+      <div id="jtStatusBanner" class="jt-banner" role="status" aria-live="polite"></div>
+
+      <div class="jt-tabbar" role="tablist" aria-label="Secciones de JellyTV">
+        <button type="button" class="jt-tab-btn emby-button" data-tab="overview" role="tab" aria-selected="true" aria-controls="jt-tab-overview"><span aria-hidden="true">◫</span><span class="jt-tab-label">Resumen</span></button>
+        <button type="button" class="jt-tab-btn emby-button" data-tab="channels" role="tab" aria-selected="false" aria-controls="jt-tab-channels"><span aria-hidden="true">▤</span><span class="jt-tab-label">Canales</span></button>
+        <button type="button" class="jt-tab-btn emby-button" data-tab="catalog" role="tab" aria-selected="false" aria-controls="jt-tab-catalog"><span aria-hidden="true">⊞</span><span class="jt-tab-label">Catálogo</span></button>
+        <button type="button" class="jt-tab-btn emby-button" data-tab="epg" role="tab" aria-selected="false" aria-controls="jt-tab-epg"><span aria-hidden="true">▦</span><span class="jt-tab-label">Guía EPG</span></button>
+        <button type="button" class="jt-tab-btn emby-button" data-tab="proxies" role="tab" aria-selected="false" aria-controls="jt-tab-proxies"><span aria-hidden="true">⇄</span><span class="jt-tab-label">Proxies</span></button>
+        <button type="button" class="jt-tab-btn emby-button" data-tab="settings" role="tab" aria-selected="false" aria-controls="jt-tab-settings"><span aria-hidden="true">⚙</span><span class="jt-tab-label">Ajustes</span></button>
+      </div>
+
+      <form id="JellyTVConfigForm">
+
+        <!-- ══ RESUMEN ═══════════════════════════════════════════════════ -->
+        <div id="jt-tab-overview" class="jt-tab-content active" role="tabpanel">
+          <div class="jt-grid-cards" id="channelDash"></div>
+
+          <div class="jt-card">
+            <div class="jt-card-head">
+              <div>
+                <h2>Salud de canales</h2>
+                <div class="jt-muted jt-small">Comprueba cada fuente de cada canal, también la de los canales apagados, para saber si ya puedes encenderlos. Los canales caídos se apagan solos y vuelven cuando responden.</div>
+              </div>
+              <div class="jt-toolbar" style="margin:0;">
+                <button id="btnScanChannels" is="emby-button" type="button" class="raised button-submit emby-button"><span>Verificar salud</span></button>
+                <button id="btnRefreshChannels" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Actualizar canales en Jellyfin</span></button>
+              </div>
+            </div>
+            <div id="healthProgress" class="jt-progress" style="display:none;"><div id="healthProgressBar" class="jt-progress-bar"></div></div>
+            <div id="healthProgressText" class="jt-status"></div>
+            <div id="healthOffReady" class="jt-small"></div>
+          </div>
+
+          <div class="jt-card">
+            <div class="jt-card-head">
+              <div>
+                <h2>Acceso rápido</h2>
+                <div class="jt-muted jt-small">URLs auxiliares del plugin. Los canales llegan a Live TV por el servicio nativo; no hay que registrar ninguna playlist.</div>
+              </div>
+            </div>
+            <div class="jt-url-list">
+              <div class="jt-url-row" id="ovTunerRow">
+                <span class="jt-url-label">Playlist M3U (clientes externos)</span>
+                <code class="jt-url" id="ovTunerUrl"></code>
+                <button id="btnCopyOvTuner" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Copiar</span></button>
+              </div>
+              <div class="jt-url-row">
+                <span class="jt-url-label">EPG XMLTV</span>
+                <code class="jt-url" id="ovEpgUrl"></code>
+                <button id="btnCopyOvEpg" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Copiar</span></button>
+              </div>
+            </div>
+            <div class="jt-toolbar">
+              <button type="button" class="raised button-submit emby-button" data-goto-tab="channels"><span>Gestionar canales</span></button>
+              <button type="button" class="raised emby-button jt-secondary" data-goto-tab="epg"><span>Sincronizar guía</span></button>
+            </div>
+          </div>
+
+          <div class="jt-grid-2">
+            <div class="jt-card jt-card-2">
+              <h2>Estado de la guía</h2>
+              <div id="ovEpgStatus" class="jt-muted jt-small">Sin datos de sincronización.</div>
+            </div>
+            <div class="jt-card jt-card-2">
+              <h2>Diagnóstico</h2>
+              <div class="jt-muted jt-small" style="margin-bottom:10px;">Consulta sesiones activas y el log del plugin.</div>
+              <div class="jt-toolbar">
+                <button type="button" class="raised emby-button jt-secondary" data-diag="sessions"><span>Ver sesiones</span></button>
+                <button type="button" class="raised emby-button jt-secondary" data-diag="log"><span>Ver log</span></button>
+              </div>
+              <pre id="diagOut" class="jt-small" style="display:none;margin-top:10px;max-height:420px;overflow:auto;white-space:pre-wrap;word-break:break-all;"></pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- ══ CANALES ═══════════════════════════════════════════════════ -->
+        <div id="jt-tab-channels" class="jt-tab-content" role="tabpanel">
+          <div class="jt-card">
+            <div class="jt-card-head">
+              <div>
+                <h2>Canales</h2>
+                <div class="jt-muted jt-small">Cada canal puede tener varias fuentes en orden de failover.</div>
+              </div>
+              <div class="jt-toolbar" style="margin:0;">
+                <button id="btnEnrichIdentity" is="emby-button" type="button" class="raised emby-button jt-secondary" title="Busca en iptv-org la identidad, el país, el tvg-id y el logo de los canales que no los tienen"><span>Completar identidad y logos</span></button>
+                <button id="btnExportM3u" is="emby-button" type="button" class="raised emby-button jt-secondary" title="Descarga un M3U estándar (sin relay) con la URL de cada canal, para respaldo o para usarlo en otro reproductor"><span>Exportar M3U</span></button>
+                <button id="btnImportM3u" is="emby-button" type="button" class="raised emby-button jt-secondary" title="Agrega canales desde un M3U estándar: tvg-id, tvg-name, tvg-logo y group-title"><span>Importar M3U</span></button>
+                <input id="m3uImportFile" type="file" accept=".m3u,.m3u8,text/plain" style="display:none;"/>
+                <button id="btnAddChannel" is="emby-button" type="button" class="raised button-submit emby-button"><span>+ Agregar canal</span></button>
+              </div>
+            </div>
+            <div class="jt-filters">
+              <div class="inputContainer" style="margin:0;">
+                <input id="chSearch" is="emby-input" type="search" placeholder="Nombre, categoría o tvg-id" label="Buscar"/>
+              </div>
+              <div class="inputContainer" style="margin:0;">
+                <label class="inputLabel inputLabelUnfocused" for="chCatFilter">Categoría</label>
+                <select id="chCatFilter" is="emby-select" class="emby-select"></select>
+              </div>
+            </div>
+            <div class="jt-tableWrap">
+              <table class="jt-table">
+                <thead><tr><th>Logo</th><th data-sort="name" onclick="JellyTV.sortBy('name')">Nombre <span class="jt-sort-ind">↕</span></th><th data-sort="type" onclick="JellyTV.sortBy('type')">Tipo <span class="jt-sort-ind">↕</span></th><th data-sort="cat" onclick="JellyTV.sortBy('cat')">Categoría <span class="jt-sort-ind">↕</span></th><th data-sort="state" onclick="JellyTV.sortBy('state')">Estado <span class="jt-sort-ind">↕</span></th><th data-sort="health" onclick="JellyTV.sortBy('health')">Salud <span class="jt-sort-ind">↕</span></th><th style="width:140px">Acciones</th></tr></thead>
+                <tbody id="channelsTableBody"></tbody>
+              </table>
+            </div>
+            <div id="channelsStatus" class="jt-status"></div>
+          </div>
+        </div>
+
+        <!-- ══ GUÍA EPG ══════════════════════════════════════════════════ -->
+        <div id="jt-tab-catalog" class="jt-tab-content" role="tabpanel">
+          <div class="jt-card">
+            <h2>Catálogo de proveedores FAST</h2>
+            <div class="jt-muted jt-small" style="margin-bottom:10px;">Canales gratuitos de Pluto TV, Plex y Tubi, consultados directamente en cada proveedor. Abre un proveedor, marca los canales que quieres y pulsa «Importar»: el canal se crea con su logo y su id de guía, y la guía del proveedor se añade a las fuentes EPG (sincronízala después). Muchos canales están en varios proveedores: te avisamos cuando ya tienes uno con el mismo nombre.</div>
+            <div class="inputContainer" style="max-width:420px;">
+              <label class="inputLabel inputLabelUnfocused" for="catExit">Consultar los catálogos desde</label>
+              <select id="catExit" is="emby-select" class="emby-select"><option value="">La IP de este servidor</option></select>
+              <div class="jt-m-hint">El catálogo lo decide el país de la IP. Con un proxy de otro país (pestaña Proxies) ves el catálogo de ese país, y los canales que importes salen por ese mismo proxy.</div>
+            </div>
+            <div id="catalogProviders" class="jt-acc"></div>
+          </div>
+        </div>
+
+        <div id="jt-tab-epg" class="jt-tab-content" role="tabpanel">
+          <div class="jt-card">
+            <h2>Fuentes EPG (XMLTV)</h2>
+            <div class="jt-muted jt-small" style="margin-bottom:10px;" data-i18n="m1">El plugin descarga tus fuentes XMLTV, filtra solo tus canales (por <code>tvg-id</code> o, si la fuente no lo trae, por nombre), enriquece con TMDB y fusiona una guía local que Jellyfin consume automáticamente.</div>
+            <div class="jt-toolbar">
+              <button id="btnAddEpgSource" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>+ Agregar fuente EPG</span></button>
+              <button id="btnSyncEpg" is="emby-button" type="button" class="raised button-submit emby-button"><span>Sincronizar guía local</span></button>
+              <button id="btnSyncEpgClean" is="emby-button" type="button" class="raised emby-button jt-secondary" title="Borra las cachés del plugin y vuelve a buscar todos los metadatos"><span>Sincronizar desde cero</span></button>
+            </div>
+            <div class="jt-url-row" style="margin-top:12px;">
+              <span class="jt-url-label">EPG XMLTV</span>
+              <code class="jt-url" id="epgUrlDisplay"></code>
+              <button id="btnCopyEpg" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Copiar URL</span></button>
+            </div>
+            <div id="epgProgress" class="jt-progress" style="display:none;margin-top:12px;"><div id="epgProgressBar" class="jt-progress-bar"></div></div>
+            <div id="epgProgressText" class="jt-status"></div>
+            <div id="epgSourceList"></div>
+            <div id="epgStatus" class="jt-status"></div>
+          </div>
+
+          <div id="epgEditor" class="jt-panel" style="display:none;">
+            <input type="hidden" id="epgEditId"/>
+            <div class="jt-grid-2">
+              <div class="inputContainer"><input id="epgEditName" is="emby-input" type="text" placeholder="Mexico EPG" label="Nombre"/></div>
+              <div class="inputContainer"><input id="epgEditUrl" is="emby-input" type="text" placeholder="https://epg.example/files/epg-mx.xml" label="URL del archivo XMLTV"/></div>
+            </div>
+            <div style="margin-top:.5em;"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input id="epgEditEnabled" type="checkbox" checked/> <span>Habilitada</span></label></div>
+            <div class="jt-toolbar"><button id="btnSaveEpgSource" is="emby-button" type="button" class="raised button-submit emby-button"><span>Guardar</span></button><button id="btnCancelEpgSource" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Cancelar</span></button></div>
+          </div>
+
+          <div class="jt-card" id="epgCoverageCard">
+            <div class="jt-card-head">
+              <div>
+                <h2>Cobertura de la guía</h2>
+                <div class="jt-muted jt-small" id="epgCoverageSummary">Cargando…</div>
+              </div>
+              <div class="jt-toolbar"><button id="btnRefreshCoverage" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Actualizar</span></button></div>
+            </div>
+            <div class="jt-tableWrap">
+              <table class="jt-table jt-cov">
+                <thead><tr><th>Canal</th><th>tvg-id</th><th>Fuente principal</th><th>Programas</th><th>Cubre hasta</th><th>Estado</th></tr></thead>
+                <tbody id="epgCoverageBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ══ PROXIES ═══════════════════════════════════════════════════ -->
+        <div id="jt-tab-proxies" class="jt-tab-content" role="tabpanel">
+          <div class="jt-card">
+            <div class="jt-card-head">
+              <div>
+                <h2>Proxies de salida</h2>
+                <div class="jt-muted jt-small">Para canales con geobloqueo. Declara el país por el que sale cada proxy y, en la fuente del canal, elige ese país en «Salida»: el servidor descarga el canal completo (lista, variantes y segmentos) por un proxy de ese país, siempre el mismo para no cambiar de IP a media transmisión. Si falla, pasa a otro del mismo país.</div>
+              </div>
+              <button id="btnShowProxyEditor" is="emby-button" type="button" class="raised button-submit emby-button"><span>Agregar proxy</span></button>
+            </div>
+            <div id="proxyEditor" class="jt-panel" style="display:none;">
+              <h4 id="proxyEditorTitle">Agregar proxy</h4>
+              <div class="jt-grid-2">
+                <div class="inputContainer"><input id="proxyHost" is="emby-input" type="text" placeholder="192.0.2.10" label="Host / IP"/></div>
+                <div class="inputContainer"><input id="proxyPort" is="emby-input" type="number" min="1" max="65535" placeholder="9002" label="Puerto"/></div>
+                <div class="inputContainer"><input id="proxyCountry" is="emby-input" type="text" maxlength="2" placeholder="US" label="País de salida (2 letras)"/></div>
+                <div class="inputContainer"><input id="proxyUsername" is="emby-input" type="text" label="Usuario (opcional)"/></div>
+                <div class="inputContainer"><input id="proxyPassword" is="emby-input" type="password" label="Contraseña (opcional)"/></div>
+              </div>
+              <div class="checkboxContainer" style="margin-top:.5em;"><input id="proxyUseHttps" type="checkbox"/><label class="checkboxLabel emby-checkbox-label" for="proxyUseHttps">El proxy usa TLS (HTTPS)</label></div>
+              <div class="jt-m-hint" style="margin-bottom:10px;">Un proxy HTTPS cuyo certificado no coincide con su IP funciona igual: el plugin no valida el certificado del proxy.</div>
+              <div class="inputContainer"><textarea id="proxyBulk" class="jt-textarea" rows="4" placeholder="O pega varios, uno por línea:&#10;https://192.0.2.10:9002&#10;https://203.0.113.5:9002" aria-label="Lista de proxies"></textarea></div>
+              <div class="jt-m-hint">Con una lista se usan el país y las credenciales de arriba para todos; el esquema (https://) marca TLS por proxy.</div>
+              <div class="jt-toolbar">
+                <button id="btnSaveProxy" is="emby-button" type="button" class="raised button-submit emby-button"><span>Guardar</span></button>
+                <button id="btnTestProxyEditor" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Probar</span></button>
+                <button id="btnCancelProxy" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Cancelar</span></button>
+              </div>
+              <div id="proxyEditorStatus" class="jt-status"></div>
+            </div>
+            <div class="jt-tableWrap">
+              <table class="jt-table"><thead><tr><th>Host</th><th>Puerto</th><th>Esquema</th><th>País</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="proxiesTableBody"></tbody></table>
+            </div>
+            <div class="inputContainer" style="margin-top:14px;max-width:560px;"><input id="proxyTestUrl" is="emby-input" type="text" placeholder="https://… (opcional)" label="Dirección con la que probar"/></div>
+            <div class="jt-m-hint">«Probar» se ejecuta desde este servidor. Por defecto usa un canal que sale por el país del proxy; así comprueba que el proxy llega de verdad al canal. Sin ninguna dirección solo comprueba que acepta conexiones.</div>
+            <div id="proxyStatus" class="jt-status"></div>
+          </div>
+        </div>
+
+        <!-- ══ AJUSTES ═══════════════════════════════════════════════════ -->
+        <div id="jt-tab-settings" class="jt-tab-content" role="tabpanel">
+
+          <div class="jt-card">
+            <h2>Tuner y entrega</h2>
+            <div class="inputContainer" style="max-width:640px;">
+              <label class="inputLabel inputLabelUnfocused" for="LiveTvMode">Cómo llegan los canales a Live TV</label>
+              <select id="LiveTvMode" is="emby-select" class="emby-select">
+                <option value="Auto">Automático (recomendado): servicio nativo y migración del tuner M3U</option>
+                <option value="Native">Servicio nativo JellyTV (sin playlist)</option>
+                <option value="M3u">Solo tuner M3U (heredado: Jellyfin transcodifica los .m3u8)</option>
+              </select>
+              <div class="fieldDescription">El tuner M3U estándar de Jellyfin 12 nunca reproduce en directo un manifiesto .m3u8 y fuerza el transcode; el servicio nativo sí permite Direct Play.</div>
+            </div>
+            <div id="liveTvHint" class="jt-small jt-muted" style="margin-bottom:8px;"></div>
+            <div class="jt-url-row" id="tunerUrlRow" style="display:none;">
+              <span class="jt-url-label">Tuner M3U</span>
+              <code class="jt-url" id="tunerUrlDisplay"></code>
+              <button id="btnCopyTuner" is="emby-button" type="button" class="raised button-submit emby-button"><span>Copiar URL</span></button>
+            </div>
+            <div class="inputContainer" style="max-width:640px;margin-top:12px;"><input id="PublicStreamingBaseUrl" is="emby-input" name="PublicStreamingBaseUrl" type="text" placeholder="https://tv.example.com" label="URL de respaldo para streams (opcional)"/><div class="fieldDescription">No hace falta: cada cliente recibe el relay con el mismo host con el que abrió Jellyfin (localhost, red local o dominio público). Solo se usa en tareas sin cliente, como refrescar la guía.</div></div>
+            <div class="inputContainer" style="max-width:640px;"><input id="UserAgent" is="emby-input" name="UserAgent" type="text" label="User-Agent HTTP global"/></div>
+          </div>
+
+          <div class="jt-card">
+            <h2>TMDB</h2>
+            <div class="jt-small jt-muted" style="margin-bottom:8px;">Con una credencial TMDB el plugin enriquece la guía local con arte y metadata de los programas. Sin ella se usa el contenido original de las fuentes.</div>
+            <div class="inputContainer" style="max-width:640px;"><input id="TmdbApiKey" is="emby-input" name="TmdbApiKey" type="password" placeholder="••••••" label="TMDB API Key (v3) o token de lectura (v4)"/></div>
+          </div>
+
+          <div class="jt-card">
+            <h2>Guía automática</h2>
+            <div class="jt-small jt-muted" style="margin-bottom:8px;" data-i18n="m2">Los canales se identifican en <strong>iptv-org</strong> (país, tvg-id y logo). Con eso el plugin descarga solo los XMLTV públicos de los países de tus canales y reparte la programación a cada uno; a los que ninguno cubre les busca su página en GatoTV. Lo que añadas abajo o en la ficha del canal tiene prioridad. Desactívala si prefieres usar únicamente tus fuentes.</div>
+            <div class="checkboxContainer"><input id="AutoGuideEnabled" name="AutoGuideEnabled" type="checkbox"/><label class="checkboxLabel emby-checkbox-label" for="AutoGuideEnabled">Buscar la guía automáticamente para los canales identificados</label></div>
+          </div>
+
+          <div class="jt-card">
+            <h2>Recetas de guías HTML (avanzado)</h2>
+            <div class="jt-small jt-muted" style="margin-bottom:8px;" data-i18n="m3">Cuando la guía propia de un canal es una página web (no un JSON ni un XMLTV), el plugin la lee con una <strong>receta</strong>: datos que dicen cómo reconocer cada fila de la programación. Ya viene incluida la de <code>gatotv.com</code> (páginas de canal); aquí puedes añadir otras como una lista JSON. Cada receta lleva <code>host</code> (dominio), <code>row</code> (expresión regular con los grupos <code>start</code>, <code>title</code> y, si existen, <code>stop</code>, <code>desc</code>, <code>image</code>), <code>zone</code> (zona IANA de las horas), <code>dayUrl</code> (por ejemplo <code>{url}/{date:yyyy-MM-dd}</code>), <code>days</code> y <code>delayMs</code>. Usa <strong>Probar guía</strong> en la ficha del canal para comprobarla antes de guardar.</div>
+            <div class="inputContainer"><textarea id="HtmlGuideRecipesJson" class="jt-textarea" spellcheck="false" placeholder='[{"name":"Mi sitio","host":"example.com","row":"&lt;li&gt;(?&lt;start&gt;\\d+:\\d+) (?&lt;title&gt;[^&lt;]+)&lt;/li&gt;","zone":"America/Mexico_City"}]'></textarea></div>
+          </div>
+
+          <div class="jt-card">
+            <h2>Zona horaria de la guía</h2>
+            <div class="jt-small jt-muted" style="margin-bottom:8px;" data-i18n="m4">Zona IANA en la que están escritas las horas de tus XMLTV. Pulsa <strong>Usar mi zona</strong> para tomar la del navegador. Déjalo en UTC si tu archivo ya viene en UTC.</div>
+            <div class="jt-grid-2">
+              <div class="inputContainer"><input id="EpgTimezone" is="emby-input" name="EpgTimezone" type="text" list="tzList" placeholder="UTC" autocomplete="off" label="Zona horaria (IANA)"/></div>
+              <div class="inputContainer" style="display:flex;align-items:flex-end;"><button id="btnDetectTz" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Usar mi zona</span></button></div>
+            </div>
+            <datalist id="tzList">
+              <option value="UTC"></option>
+              <option value="America/Mexico_City"></option>
+              <option value="America/Monterrey"></option>
+              <option value="America/Argentina/Buenos_Aires"></option>
+              <option value="America/Bogota"></option>
+              <option value="America/Lima"></option>
+              <option value="America/Santiago"></option>
+              <option value="America/Caracas"></option>
+              <option value="America/Phoenix"></option>
+              <option value="America/Los_Angeles"></option>
+              <option value="America/New_York"></option>
+              <option value="Europe/Madrid"></option>
+            </datalist>
+          </div>
+
+          <div class="jt-card">
+            <h2>Programación</h2>
+            <div class="jt-grid-2">
+              <div class="inputContainer"><input id="HealthCheckIntervalMinutes" is="emby-input" name="HealthCheckIntervalMinutes" type="number" min="5" max="1440" label="Health check de canales (minutos)"/></div>
+              <div class="inputContainer"><input id="SourceSyncIntervalHours" is="emby-input" name="SourceSyncIntervalHours" type="number" min="1" max="168" label="Sincronización EPG (horas)"/></div>
+            </div>
+            <div class="jt-checks">
+              <div class="checkboxContainer"><input id="AutoRefreshGuideOnChange" name="AutoRefreshGuideOnChange" type="checkbox"/><label class="checkboxLabel emby-checkbox-label" for="AutoRefreshGuideOnChange">Refrescar la guía de Jellyfin al cambiar canales/EPG</label></div>
+            </div>
+            <p class="jt-small jt-muted" style="margin:.4em 0 0;" data-i18n="m5">Tareas en <b>Dashboard → Tareas programadas</b>: <b>JellyTV: Health Check de Canales</b> y <b>JellyTV: Sincronizar EPG</b>. Cada una dispara el “Refresh Guide” de Jellyfin cuando produce cambios y el checkbox está activo.</p>
+          </div>
+
+          <div class="jt-card">
+            <h2>Almacenamiento</h2>
+            <div class="jt-small jt-muted" style="margin-bottom:8px;" data-i18n="m6">Dónde se guardan canales, proxies y fuentes EPG. <strong>PostgreSQL</strong> requiere el plugin <em>PostgreSQL Database Provider</em> y que Jellyfin use PostgreSQL; si no está disponible, el plugin usa <strong>archivos JSON</strong> locales sin obligarte a instalar nada.</div>
+            <div class="inputContainer" style="max-width:640px;">
+              <label class="inputLabel inputLabelUnfocused" for="StorageBackend">Backend</label>
+              <select id="StorageBackend" is="emby-select" class="emby-select">
+                <option value="Auto">Automático (PostgreSQL si está disponible)</option>
+                <option value="Postgres">PostgreSQL (PG Provider)</option>
+                <option value="Json">Archivos JSON (local)</option>
+              </select>
+              <div class="fieldDescription">El cambio se aplica al reiniciar Jellyfin. La configuración XML se mantiene como espejo para que el cambio sea reversible.</div>
+            </div>
+            <div class="inputContainer" style="max-width:640px;">
+              <input id="JsonDataPath" is="emby-input" name="JsonDataPath" type="text" placeholder="Vacío = &lt;datos&gt;/JellyTV" label="Carpeta de archivos JSON"/>
+              <div class="fieldDescription">Solo se acepta una ruta absoluta. Si está vacía, se usa la carpeta de datos del plugin, que sobrevive a las actualizaciones.</div>
+            </div>
+            <div class="jt-checks">
+              <div class="checkboxContainer"><input id="EnableJsonCourtesyBackup" name="EnableJsonCourtesyBackup" type="checkbox"/><label class="checkboxLabel emby-checkbox-label" for="EnableJsonCourtesyBackup">Escribir copia JSON aunque PostgreSQL esté activo</label></div>
+            </div>
+            <p class="jt-small jt-muted" style="margin:.4em 0 0;">La copia JSON te deja migrar o volver a archivos sin depender de PG Provider.</p>
+            <div class="jt-url-row" style="margin-top:6px;">
+              <span class="jt-url-label">Activo</span>
+              <code class="jt-url" id="storageInfo">—</code>
+              <button id="btnRefreshStorage" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Comprobar</span></button>
+            </div>
+            <div id="storageFiles" class="jt-small jt-muted" style="margin-top:6px;"></div>
+          </div>
+
+          <div class="jt-card">
+            <h2>Seguridad del relay</h2>
+            <div class="jt-small jt-muted" style="margin-bottom:8px;">Clave que autentica las URLs anónimas de playlist, stream y segmentos. Se genera automáticamente y nunca debe compartirse.</div>
+            <div class="inputContainer" style="max-width:640px;">
+              <input id="RelayKey" is="emby-input" type="text" readonly label="Relay key"/>
+            </div>
+            <div class="jt-toolbar">
+              <button id="btnCopyRelayKey" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Copiar clave</span></button>
+              <button id="btnRotateRelayKey" is="emby-button" type="button" class="raised button-cancel emby-button"><span>Rotar clave</span></button>
+            </div>
+          </div>
+
+          <div class="jt-card">
+            <h2>Ajustes avanzados</h2>
+            <div class="jt-grid-2">
+              <div class="inputContainer"><input id="PreferredAudioLanguages" is="emby-input" name="PreferredAudioLanguages" type="text" placeholder="es,spa,es-419" label="Idiomas de audio preferidos"/></div>
+              <div class="inputContainer"><input id="PreferredSubtitleLanguages" is="emby-input" name="PreferredSubtitleLanguages" type="text" placeholder="es,spa" label="Idiomas de subtítulos preferidos"/></div>
+            </div>
+            <div class="jt-checks">
+              <div class="checkboxContainer"><input id="VerboseLogging" name="VerboseLogging" type="checkbox"/><label class="checkboxLabel emby-checkbox-label" for="VerboseLogging">Logging detallado</label></div>
+            </div>
+            <div class="jt-toolbar"><button id="btnSaveSettings" is="emby-button" type="button" class="raised button-submit emby-button"><span>Guardar configuración</span></button></div>
+          </div>
+        </div>
+      </form>
+
+      <!-- ══ MODAL — Canal ═══════════════════════════════════════════════ -->
+      <div id="channelModal" class="jt-m-overlay">
+        <div class="jt-m" role="dialog" aria-modal="true" aria-labelledby="channelModalTitle">
+          <div class="jt-m-head">
+            <h3 class="jt-m-title" id="channelModalTitle">Agregar canal</h3>
+            <button type="button" id="chModalClose" class="jt-m-close" aria-label="Cerrar">&times;</button>
+          </div>
+          <input type="hidden" id="chEditId"/>
+
+          <div class="jt-m-body">
+
+            <section class="jt-m-sec">
+              <h4>Información</h4>
+              <div class="jt-m-grid">
+                <div class="inputContainer">
+                  <input id="chName" is="emby-input" type="text" placeholder="Fox Sports Premium" label="Nombre público *"/>
+                </div>
+                <div class="inputContainer">
+                  <input id="chCategory" is="emby-input" type="text" placeholder="Sports" label="Categoría / Grupo"/>
+                </div>
+              </div>
+            </section>
+
+            <section class="jt-m-sec">
+              <h4>Fuentes / transmisiones</h4>
+              <div id="chSourcesList"></div>
+              <div style="margin-top:6px;">
+                <button id="btnAddSource" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>+ Agregar fuente (respaldo)</span></button>
+              </div>
+              <div class="jt-m-hint" data-i18n="m7">La <strong>primera</strong> fuente es la principal; el resto son respaldos en orden.<br/><strong>Directo</strong>: URL reproducible tal cual, Jellyfin la reproduce sin pasar por el plugin. <strong>FAST</strong>: canal público sin token; el plugin lo sirve por su relay y limpia anuncios y beacons. <strong>Tokenizado</strong>: la URL es un gateway que entrega un token. Sin marcar <em>Token de sesión</em> el token es efímero y lo renueva el plugin; marcado, el token dura horas y se entrega directo.</div>
+            </section>
+
+            <section class="jt-m-sec">
+              <h4>Identidad &amp; EPG</h4>
+              <div class="jt-id-card">
+                <img id="chIdLogo" class="jt-id-logo" alt="" style="display:none;"/>
+                <div id="chIdLogoEmpty" class="jt-id-logo">sin logo</div>
+                <div class="jt-id-info">
+                  <div class="jt-id-name" id="chIdName">Sin identidad vinculada</div>
+                  <div class="jt-small jt-muted" id="chIdMeta">Vincula el canal a su identidad (iptv-org) para completar el logo y enlazar la guía.</div>
+                </div>
+                <div class="jt-actions">
+                  <button id="btnIdSearch" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Buscar identidad</span></button>
+                  <button id="btnIdClear" is="emby-button" type="button" class="raised emby-button jt-secondary" style="display:none;"><span>Quitar</span></button>
+                </div>
+              </div>
+              <div id="chIdResults" class="jt-id-results"></div>
+              <div class="jt-m-grid">
+                <div class="inputContainer">
+                  <input id="chTvgId" is="emby-input" type="text" placeholder="Canal.mx  ·  608049ae…-67d4b095…" label="ID de guía (tvg-id / channel-id)"/>
+                </div>
+                <div class="inputContainer">
+                  <label class="inputLabel inputLabelUnfocused" for="chCountry">País</label>
+                  <select id="chCountry" is="emby-select" class="emby-select"><option value="">Sin definir</option><option value="MX">México · MX</option><option value="US">Estados Unidos · US</option><option value="UY">Uruguay · UY</option><option value="AR">Argentina · AR</option><option value="CO">Colombia · CO</option><option value="CL">Chile · CL</option><option value="PE">Perú · PE</option><option value="VE">Venezuela · VE</option><option value="EC">Ecuador · EC</option><option value="BO">Bolivia · BO</option><option value="PY">Paraguay · PY</option><option value="CR">Costa Rica · CR</option><option value="PA">Panamá · PA</option><option value="DO">República Dominicana · DO</option><option value="GT">Guatemala · GT</option><option value="HN">Honduras · HN</option><option value="SV">El Salvador · SV</option><option value="NI">Nicaragua · NI</option><option value="CU">Cuba · CU</option><option value="PR">Puerto Rico · PR</option><option value="ES">España · ES</option><option value="PT">Portugal · PT</option><option value="BR">Brasil · BR</option><option value="GB">Reino Unido · GB</option><option value="FR">Francia · FR</option><option value="DE">Alemania · DE</option><option value="IT">Italia · IT</option><option value="RU">Rusia · RU</option><option value="CN">China · CN</option><option value="JP">Japón · JP</option><option value="KR">Corea del Sur · KR</option><option value="IN">India · IN</option><option value="TR">Turquía · TR</option><option value="QA">Catar · QA</option><option value="AE">Emiratos Árabes · AE</option><option value="CA">Canadá · CA</option><option value="AU">Australia · AU</option></select>
+                  <div class="fieldDescription">Ayuda a elegir la guía correcta cuando un canal aparece en varias fuentes (por ejemplo Univision en las guías de México y de Estados Unidos) y a acertar en los metadatos.</div>
+                </div>
+                <div class="inputContainer jt-m-full">
+                  <input id="chEpgPage" is="emby-input" type="text" placeholder="https://example.com/schedulejson/{date}" label="Guía propia del canal (URL, opcional)"/>
+                  <div class="fieldDescription" data-i18n="m8">Si la web oficial publica su programación, pega aquí la dirección que devuelve el JSON (la ves en las herramientas del navegador, pestaña Red) o un XMLTV. <code>{date}</code> se sustituye por el día (dd-MM-yyyy) y <code>{date:yyyy-MM-dd}</code> admite otro formato. Compite con las demás fuentes y suele ganar, por ser la oficial. También sirve una página HTML (por ejemplo gatotv.com/canal/…) si hay una receta para su dominio.</div>
+                  <div class="jt-actions" style="margin-top:8px;"><button id="btnTestGuide" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Probar guía</span></button></div>
+                  <div id="chGuideTest" class="jt-small" style="margin-top:8px;"></div>
+                </div>
+                <div class="inputContainer jt-m-full">
+                  <input id="chLogoUrl" is="emby-input" type="text" placeholder="https://host/logo.png" label="URL del logo"/>
+                </div>
+              </div>
+            </section>
+
+            <section class="jt-m-sec">
+              <h4>HTTP &amp; cabeceras</h4>
+              <div class="jt-m-grid">
+                <div class="inputContainer jt-m-full">
+                  <input id="chUserAgent" is="emby-input" type="text" placeholder="Vacío = User-Agent global" label="User-Agent"/>
+                </div>
+                <div class="inputContainer jt-m-full">
+                  <label class="inputLabel inputLabelUnfocused" for="chHeaders">Cabeceras personalizadas</label>
+                  <textarea id="chHeaders" rows="3" class="jt-textarea" placeholder="Referer: https://example.com"></textarea>
+                  <div class="jt-m-hint">Una por línea, formato: Nombre: Valor</div>
+                </div>
+              </div>
+            </section>
+
+            <section class="jt-m-sec">
+              <h4>Estado</h4>
+              <div class="checkboxContainer" style="margin:0;">
+                <input id="chEnabled" type="checkbox" checked/>
+                <label class="checkboxLabel emby-checkbox-label" for="chEnabled">Canal habilitado</label>
+              </div>
+            </section>
+
+          </div>
+
+          <div class="jt-m-foot">
+            <button id="btnSaveChannel" is="emby-button" type="button" class="raised button-submit emby-button"><span>Guardar canal</span></button>
+            <button id="btnCancelChannel" is="emby-button" type="button" class="raised emby-button jt-secondary"><span>Cancelar</span></button>
+          </div>
+        </div>
+      </div>
+
+      <div id="jtToasts" class="jt-toasts" aria-live="polite" aria-atomic="false"></div>
+
+      <dialog id="jtConfirm" class="jt-dialog">
+        <div class="jt-dlg-head" id="jtConfirmTitle">Confirmar</div>
+        <div class="jt-dlg-body" id="jtConfirmText"></div>
+        <div class="jt-dlg-foot">
+          <button type="button" class="raised emby-button jt-secondary" id="jtConfirmCancel"><span>Cancelar</span></button>
+          <button type="button" class="raised button-cancel emby-button" id="jtConfirmOk"><span>Confirmar</span></button>
+        </div>
+      </dialog>
+
+    </div>
+  </div>
+
+  <script type="text/javascript">
+<!--@include i18n.js-->
+<!--@include app.js-->
+  </script>
+</div>
+</body>
+</html>

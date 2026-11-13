@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
 using Jellyfin.Plugin.JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Services.Providers;
 using Jellyfin.Plugin.JellyTV.Services.Storage;
 using Jellyfin.Plugin.JellyTV.Services.Tmdb;
 using Microsoft.Extensions.Logging;
@@ -937,11 +938,20 @@ public class EpgFilterService
             using (var dlCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
                 dlCts.CancelAfter(TimeSpan.FromMinutes(XmltvTimeoutMinutes));
-                using var response = await client.GetAsync(sourceUrl, HttpCompletionOption.ResponseHeadersRead, dlCts.Token).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                using var body = await response.Content.ReadAsStreamAsync(dlCts.Token).ConfigureAwait(false);
-                using var file = new FileStream(downloaded, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-                await body.CopyToAsync(file, dlCts.Token).ConfigureAwait(false);
+                if (ProviderUrl.TryParseGuide(sourceUrl, out var providerId))
+                {
+                    // La guía de un proveedor (Pluto, Plex, Tubi) no es un archivo que bajar: el plugin la arma con la API del proveedor.
+                    var providers = Plugin.Instance?.Providers ?? throw new InvalidOperationException("El catálogo de proveedores no está disponible.");
+                    await providers.WriteGuideAsync(Plugin.Instance.Configuration, providerId, downloaded, dlCts.Token).ConfigureAwait(false);
+                }
+                else
+                {
+                    using var response = await client.GetAsync(sourceUrl, HttpCompletionOption.ResponseHeadersRead, dlCts.Token).ConfigureAwait(false);
+                    response.EnsureSuccessStatusCode();
+                    using var body = await response.Content.ReadAsStreamAsync(dlCts.Token).ConfigureAwait(false);
+                    using var file = new FileStream(downloaded, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+                    await body.CopyToAsync(file, dlCts.Token).ConfigureAwait(false);
+                }
             }
 
             // Pasada 1: lee todos los <channel> del archivo (algunas fuentes los intercalan con los <programme>).
