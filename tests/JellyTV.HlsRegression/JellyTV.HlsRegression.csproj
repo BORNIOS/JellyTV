@@ -12,5 +12,6 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="Fixtures/*.m3u8" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures/providers/*" CopyToOutputDirectory="PreserveNewest" LinkBase="Fixtures/providers" />
   </ItemGroup>
 </Project>

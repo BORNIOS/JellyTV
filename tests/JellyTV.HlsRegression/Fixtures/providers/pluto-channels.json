@@ -1,0 +1,201 @@
+{
+ "data": [
+  {
+   "id": "5dcde437229eff00091b6c30",
+   "slug": "pluto-tv-cine-estelar-1",
+   "name": "Pluto TV Cine Estelar",
+   "hash": "#PlutoTVReality",
+   "number": 18,
+   "summary": "Si tu sueño es vivir en Hollywood y no puedes viajar, Pluto TV Cine Estelar tiene la solución para tu problema. Vas a pasar los 365 días del año viendo a las estrellas más grande del cine desde la comodidad de tu casa.",
+   "plutoOfficeOnly": false,
+   "featured": true,
+   "featuredOrder": 1,
+   "isStitched": true,
+   "stitched": {
+    "paths": [
+     {
+      "type": "hls",
+      "path": "/stitch/hls/channel/5dcde437229eff00091b6c30/master.m3u8"
+     }
+    ]
+   },
+   "images": [
+    {
+     "type": "colorLogoPNG",
+     "style": "wide",
+     "ratio": 0.2857142857142857,
+     "defaultWidth": 280,
+     "defaultHeight": 80,
+     "url": "https://images.pluto.tv/channels/5dcde437229eff00091b6c30/colorLogoPNG_1793741871709.png"
+    },
+    {
+     "type": "colorLogoSVG",
+     "style": "wide",
+     "ratio": 0.2857142857142857,
+     "defaultWidth": 280,
+     "defaultHeight": 80,
+     "url": "https://images.pluto.tv/channels/5dcde437229eff00091b6c30/colorLogoSVG_1793741871709.svg"
+    },
+    {
+     "type": "solidLogoPNG",
+     "style": "wide",
+     "ratio": 0.2857142857142857,
+     "defaultWidth": 280,
+     "defaultHeight": 80,
+     "url": "https://images.pluto.tv/channels/5dcde437229eff00091b6c30/solidLogoPNG_1793741871709.png"
+    },
+    {
+     "type": "solidLogoSVG",
+     "style": "wide",
+     "ratio": 0.2857142857142857,
+     "defaultWidth": 280,
+     "defaultHeight": 80,
+     "url": "https://images.pluto.tv/channels/5dcde437229eff00091b6c30/solidLogoSVG_1793741871709.svg"
+    },
+    {
+     "type": "logo",
+     "style": "wide",
+     "ratio": 0.2857142857142857,
+     "defaultWidth": 280,
+     "defaultHeight": 80,
+     "url": "https://images.pluto.tv/channels/5dcde437229eff00091b6c30/logo.png?fit=fill&fm=png&h=80&w=280"
+    },
+    {
+     "type": "featuredImage",
+     "style": "tall",
+     "ratio": 1.7777777777777777,
+     "defaultWidth": 1560,
+     "defaultHeight": 878,
+     "url": "https://images.pluto.tv/channels/5dcde437229eff00091b6c30/featuredImage_1793741871709.jpg?fill=blur&fit=fill&fm=jpg&h=900&q=75&w=1600"
+    },
+    {
+     "type": "hero",
+     "style": "square",
+     "ratio": 1,
+     "defaultWidth": 660,
+     "defaultHeight": 660,
+     "url": "https://images.pluto.tv/channels/5dcde437229eff00091b6c30/thumbnail_1793741871709.jpg?fill=blur&fit=fill&fm=jpg&h=660&q=75&w=660"
+    },
+    {
+     "type": "tileColor",
+     "style": "wide",
+     "ratio": 0.25,
+     "defaultWidth": 660,
+     "defaultHeight": 150,
+     "url": "https://images.pluto.tv/channels/5dcde437229eff00091b6c30/tile.jpg?fill=blur&fit=fill&fm=jpg&h=150&q=75&w=600"
+    },
+    {
+     "type": "tileGrayscale",
+     "style": "wide",
+     "ratio": 0.25,
+     "defaultWidth": 660,
+     "defaultHeight": 150,
+     "url": "https://images.pluto.tv/channels/5dcde437229eff00091b6c30/tileGrayscale.jpg?fill=blur&fit=fill&fm=jpg&h=150&q=75&w=600"
+    }
+   ],
+   "categoryIDs": [
+    "618da9791add6600071d68b0"
+   ]
+  },
+  {
+   "id": "5dcb62e63d4d8f0009f36881",
+   "slug": "pluto-tv-cine-accion",
+   "name": "Pluto TV Cine Acción",
+   "hash": "#PlutoTVCine Acción",
+   "number": 21,
+   "summary": "Pluto TV Cine Acción es imprescindible. Lo más extremo que se pueda filmar llega hasta tus pupilas para dilatarlas por completo y traspasar la pantalla. Respira hondo y prepárate bien porque serán 24 horas por día de adrenalina.",
+   "plutoOfficeOnly": false,
+   "featured": false,
+   "featuredOrder": -1,
+   "isStitched": true,
+   "stitched": {
+    "paths": [
+     {
+      "type": "hls",
+      "path": "/stitch/hls/channel/5dcb62e63d4d8f0009f36881/master.m3u8"
+     }
+    ]
+   },
+   "images": [
+    {
+     "type": "colorLogoPNG",
+     "style": "wide",
+     "ratio": 0.2857142857142857,
+     "defaultWidth": 280,
+     "defaultHeight": 80,
+     "url": "https://images.pluto.tv/channels/5dcb62e63d4d8f0009f36881/colorLogoPNG_1760378798093.png"
+    },
+    {
+     "type": "colorLogoSVG",
+     "style": "wide",
+     "ratio": 0.2857142857142857,
+     "defaultWidth": 280,
+     "defaultHeight": 80,
+     "url": "https://images.pluto.tv/channels/5dcb62e63d4d8f0009f36881/colorLogoSVG_1760378800010.svg"
+    },
+    {
+     "type": "solidLogoPNG",
+     "style": "wide",
+     "ratio": 0.2857142857142857,
+     "defaultWidth": 280,
+     "defaultHeight": 80,
+     "url": "https://images.pluto.tv/channels/5dcb62e63d4d8f0009f36881/solidLogoPNG_1760378797655.png"
+    },
+    {
+     "type": "solidLogoSVG",
+     "style": "wide",
+     "ratio": 0.2857142857142857,
+     "defaultWidth": 280,
+     "defaultHeight": 80,
+     "url": "https://images.pluto.tv/channels/5dcb62e63d4d8f0009f36881/solidLogoSVG_1760378799053.svg"
+    },
+    {
+     "type": "logo",
+     "style": "wide",
+     "ratio": 0.2857142857142857,
+     "defaultWidth": 280,
+     "defaultHeight": 80,
+     "url": "https://images.pluto.tv/channels/5dcb62e63d4d8f0009f36881/logo.png?fit=fill&fm=png&h=80&w=280"
+    },
+    {
+     "type": "featuredImage",
+     "style": "tall",
+     "ratio": 1.7777777777777777,
+     "defaultWidth": 1560,
+     "defaultHeight": 878,
+     "url": "https://images.pluto.tv/channels/5dcb62e63d4d8f0009f36881/featuredImage_1760802090341.jpg?fill=blur&fit=fill&fm=jpg&h=900&q=75&w=1600"
+    },
+    {
+     "type": "hero",
+     "style": "square",
+     "ratio": 1,
+     "defaultWidth": 660,
+     "defaultHeight": 660,
+     "url": "https://images.pluto.tv/channels/5dcb62e63d4d8f0009f36881/thumbnail_1760802090735.jpg?fill=blur&fit=fill&fm=jpg&h=660&q=75&w=660"
+    },
+    {
+     "type": "tileColor",
+     "style": "wide",
+     "ratio": 0.25,
+     "defaultWidth": 660,
+     "defaultHeight": 150,
+     "url": "https://images.pluto.tv/channels/5dcb62e63d4d8f0009f36881/tile.jpg?fill=blur&fit=fill&fm=jpg&h=150&q=75&w=600"
+    },
+    {
+     "type": "tileGrayscale",
+     "style": "wide",
+     "ratio": 0.25,
+     "defaultWidth": 660,
+     "defaultHeight": 150,
+     "url": "https://images.pluto.tv/channels/5dcb62e63d4d8f0009f36881/tileGrayscale.jpg?fill=blur&fit=fill&fm=jpg&h=150&q=75&w=600"
+    }
+   ],
+   "categoryIDs": [
+    "618da9791add6600071d68b0"
+   ]
+  }
+ ],
+ "meta": {
+  "totalCount": 2
+ }
+}

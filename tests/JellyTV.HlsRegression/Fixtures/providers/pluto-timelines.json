@@ -1,0 +1,153 @@
+{
+ "data": [
+  {
+   "timelines": [
+    {
+     "_id": "6aed559d17f1725cac58519e",
+     "start": "2026-11-12T06:40:00.000Z",
+     "stop": "2026-11-12T08:57:00.000Z",
+     "title": "Marcado por la muerte",
+     "episode": {
+      "_id": "604b91f3b2b870001a05f14f",
+      "number": 1,
+      "season": 1,
+      "description": "El pandillero Victor se infiltra en el imperio criminal dirigido por Alphonse, pero su objetivo no es acumular poder. En realidad, la misión de Victor es hacer que Alphonse pague por destruir su alguna vez feliz vida.",
+      "duration": 8220000,
+      "originalContentDuration": 7050000,
+      "genre": "Action & Adventure",
+      "subGenre": "Crime Action",
+      "distributeAs": {
+       "AVOD": true
+      },
+      "clip": {
+       "directors": [
+        "Niels Arden Oplev"
+       ],
+       "actors": [
+        "Colin Farrell",
+        "Noomi Rapace",
+        "Dominic Cooper"
+       ],
+       "producers": [
+        "Moritz",
+        "Neal H",
+        "Wyman"
+       ],
+       "writers": [
+        "Wyman",
+        "J.H."
+       ],
+       "originalReleaseDate": "2013-01-01T00:00:00.000Z"
+      },
+      "rating": "TV-MA",
+      "name": "Marcado por la muerte",
+      "slug": "dead-man-down-2012-1-1",
+      "poster": {
+       "path": "https://images.pluto.tv/episodes/604b91f3b2b870001a05f14f/poster_1777923372019.jpg?fill=blur&fit=fill&fm=jpg&h=1000&q=75&w=694"
+      },
+      "firstAired": "2024-01-18T02:31:00.000Z",
+      "thumbnail": {
+       "path": "https://images.pluto.tv/episodes/604b91f3b2b870001a05f14f/thumbnail_1769455803042.jpg?fill=blur&fit=fill&fm=jpg&h=440&q=75&w=440"
+      },
+      "liveBroadcast": false,
+      "featuredImage": {
+       "path": "https://images.pluto.tv/episodes/604b91f3b2b870001a05f14f/screenshot16_9_1777923372019.jpg?fill=blur&fit=fill&fm=jpg&h=540&q=75&w=960"
+      },
+      "series": {
+       "_id": "604b91f2b2b870001a05f149",
+       "name": "Marcado por la muerte",
+       "slug": "dead-man-down",
+       "type": "film",
+       "tile": {
+        "path": "https://images.pluto.tv/series/604b91f2b2b870001a05f149/tile_1777923371941.jpg?fill=blur&fit=fill&fm=jpg&h=660&q=75&w=660"
+       },
+       "description": "El pandillero Victor se infiltra en el imperio criminal dirigido por Alphonse, pero su objetivo no es acumular poder. En realidad, la misión de Victor es hacer que Alphonse pague por destruir su alguna vez feliz vida.",
+       "summary": "El pandillero Victor se infiltra en el imperio criminal dirigido por Alphonse, pero su objetivo no es acumular poder. En realidad, la misión de Victor es hacer que Alphonse pague por destruir su alguna vez feliz vida.",
+       "displayName": "Marcado por la muerte",
+       "featuredImage": {
+        "path": "https://images.pluto.tv/series/604b91f2b2b870001a05f149/featuredImage_1777923371941.jpg?fill=blur&fit=fill&fm=jpg&h=900&q=75&w=1600"
+       },
+       "poster16_9": {
+        "path": "https://images.pluto.tv/series/604b91f2b2b870001a05f149/poster16_9_1777923371941.jpg?fill=blur&fit=fill&fm=jpg&h=540&q=75&w=960"
+       }
+      },
+      "poster16_9": {
+       "path": "https://images.pluto.tv/episodes/604b91f3b2b870001a05f14f/poster16_9_1777923372019.jpg?fill=blur&fit=fill&fm=jpg&h=540&q=75&w=960"
+      }
+     }
+    },
+    {
+     "_id": "6aed559d17f1725cac585158",
+     "start": "2026-11-12T08:57:00.000Z",
+     "stop": "2026-11-12T11:19:00.000Z",
+     "title": "Point Break",
+     "episode": {
+      "_id": "5e0a2bf1be8fa6764e876fe0",
+      "number": 1,
+      "season": 1,
+      "description": "Un agente del F.B.I.  se infiltra para atrapar a una banda de surfistas que pueden ser ladrones de bancos.",
+      "duration": 8520000,
+      "originalContentDuration": 7320000,
+      "genre": "Action & Adventure",
+      "subGenre": "Crime Action",
+      "distributeAs": {
+       "AVOD": true
+      },
+      "clip": {
+       "directors": [
+        "Kathryn Bigelow"
+       ],
+       "actors": [
+        "Patrick Swayze",
+        "Keanu Reeves",
+        "Gary Busey"
+       ],
+       "writers": [
+        "Rick King",
+        "W. Peter Iliff"
+       ],
+       "originalReleaseDate": "1991-11-07T00:00:00.000Z"
+      },
+      "rating": "R",
+      "name": "Point Break",
+      "slug": "point-break-1991-1-1",
+      "poster": {
+       "path": "https://images.pluto.tv/episodes/5e0a2bf1be8fa6764e876fe0/poster_1777573082216.jpg?fill=blur&fit=fill&fm=jpg&h=1000&q=75&w=694"
+      },
+      "firstAired": "2024-01-17T15:32:00.000Z",
+      "thumbnail": {
+       "path": "https://images.pluto.tv/episodes/5e0a2bf1be8fa6764e876fe0/thumbnail.jpg?fill=blur&fit=fill&fm=jpg&h=440&q=75&w=440"
+      },
+      "liveBroadcast": false,
+      "featuredImage": {
+       "path": "https://images.pluto.tv/episodes/5e0a2bf1be8fa6764e876fe0/screenshot16_9_1777573082216.jpg?fill=blur&fit=fill&fm=jpg&h=540&q=75&w=960"
+      },
+      "series": {
+       "_id": "5e0a2befbe8fa6764e876fda",
+       "name": "Point Break",
+       "slug": "point-break",
+       "type": "film",
+       "tile": {
+        "path": "https://images.pluto.tv/series/5e0a2befbe8fa6764e876fda/tile_1777573082221.jpg?fill=blur&fit=fill&fm=jpg&h=660&q=75&w=660"
+       },
+       "description": "Un agente del F.B.I.  se infiltra para atrapar a una banda de surfistas que pueden ser ladrones de bancos.",
+       "summary": "Un agente del F.B.I.  se infiltra para atrapar a una banda de surfistas que pueden ser ladrones de bancos.",
+       "displayName": "Point Break",
+       "featuredImage": {
+        "path": "https://images.pluto.tv/series/5e0a2befbe8fa6764e876fda/featuredImage_1777573082221.jpg?fill=blur&fit=fill&fm=jpg&h=900&q=75&w=1600"
+       },
+       "poster16_9": {
+        "path": "https://images.pluto.tv/series/5e0a2befbe8fa6764e876fda/poster16_9_1777573082221.jpg?fill=blur&fit=fill&fm=jpg&h=540&q=75&w=960"
+       }
+      },
+      "poster16_9": {
+       "path": "https://images.pluto.tv/episodes/5e0a2bf1be8fa6764e876fe0/poster16_9_1777573082216.jpg?fill=blur&fit=fill&fm=jpg&h=540&q=75&w=960"
+      }
+     }
+    }
+   ],
+   "channelId": "5dcb62e63d4d8f0009f36881",
+   "channelSlug": "pluto-tv-cine-accion"
+  }
+ ]
+}

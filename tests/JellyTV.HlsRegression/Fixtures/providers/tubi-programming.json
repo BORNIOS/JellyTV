@@ -1,0 +1,260 @@
+{
+ "rows": [
+  {
+   "description": "Fox en Tubi lleva la emoción del fútbol mexicano a los fanáticos, con partidos exclusivos en vivo y gratis de la Copa De Campeones, Liga MX y la Premier League.",
+   "title": "FOX en Tubi",
+   "lang": [
+    "Spanish"
+   ],
+   "content_id": 400000122,
+   "gracenote_id": "206104",
+   "publisher_id": "21f12146acbab325bb229e55010b88c3",
+   "is_cdc": false,
+   "needs_login": false,
+   "images": {
+    "custom": {},
+    "background": [
+     "https://canvas-lb.tubitv.com/opts/1ZTV-z-RY0-KNQ==/c5b633f9-d734-4b11-929b-bd650fddcb14/CIAPELgIOgUxLjEuOQ=="
+    ],
+    "hero": [
+     "https://canvas-lb.tubitv.com/opts/LZnp_NyOmkRGgw==/4945df77-1327-4af7-8a1a-a8111677a6fe/CJgDEIoBOgUxLjEuOQ=="
+    ],
+    "landscape": [
+     "https://canvas-lb.tubitv.com/opts/LU8qgica0C6pmg==/df0c23d5-c4d5-4aaf-98a3-e4063ed2e806/CNIHEMAEOgUxLjEuOQ=="
+    ],
+    "poster": [
+     "https://canvas-lb.tubitv.com/opts/eeJHnWDzIhS6jQ==/1d1c85df-0757-4a8b-8c4e-be09e12dfc9f/CJADEL4EOgUxLjEuOQ=="
+    ],
+    "thumbnail": [
+     "https://canvas-lb.tubitv.com/opts/t-rUUN3g7c8jpQ==/84f7b8d8-b91e-422c-a1d5-07e4bc70ea22/CHgQeDoFMS4xLjlAAQ=="
+    ]
+   },
+   "has_subtitle": true,
+   "video_resources": [
+    {
+     "type": "hlsv3",
+     "manifest": {
+      "url": "https://live-manifest.production-public.tubi.io/live/7d0f4aa6-93cf-4480-b8f5-2c13370acb70/playlist.m3u8?token=de-prueba&tb.sid=1"
+     },
+     "codec": "VIDEO_CODEC_H264",
+     "resolution": "VIDEO_RESOLUTION_720P",
+     "ssai_version": "apollo"
+    }
+   ],
+   "programs": [
+    {
+     "id": 16773765,
+     "description": "Pódcast llevado a la pantalla. Es un show con voz editorial fuerte y sin filtros. Debate, humor e irreverencia dentro de una conversación deportiva más allá del fútbol.",
+     "tags": [],
+     "keywords": [],
+     "title": "Los espartanos con José Pablo Coello",
+     "start_time": "2026-11-12T08:00:00Z",
+     "year": "0",
+     "updated_at": "2026-08-26T21:15:47.820Z",
+     "ratings": [
+      {
+       "code": "NR",
+       "system": "mpaa",
+       "value": "NR",
+       "descriptors": []
+      }
+     ],
+     "end_time": "2026-11-12T09:00:00Z",
+     "season_number": null,
+     "episode_number": null,
+     "program_id": 800102938,
+     "images": {
+      "custom": {},
+      "background": [
+       "https://canvas-lb.tubitv.com/opts/1ZTV-z-RY0-KNQ==/c5b633f9-d734-4b11-929b-bd650fddcb14/CIAPELgIOgUxLjEuOQ=="
+      ],
+      "hero": [
+       "https://canvas-lb.tubitv.com/opts/T9H17-UPvM6Gjw==/b7c0d1f2-8fc2-43f9-a3c7-6f59d26bb588/CKoDEJABOgUxLjEuOQ=="
+      ],
+      "landscape": [
+       "https://canvas-lb.tubitv.com/opts/x6iaIuEJLMzV1Q==/ed223576-c74f-42de-a1f7-d1a968d2b3e8/CN4HEMcEOgUxLjEuOQ=="
+      ],
+      "poster": [
+       "https://canvas-lb.tubitv.com/opts/p2URQ3nWh6KOzw==/814326b0-5719-475c-9b76-126388116933/CJYDEMcEOgUxLjEuOQ=="
+      ],
+      "thumbnail": [
+       "https://canvas-lb.tubitv.com/opts/KnqtAW5kNQkIsw==/61f22fe7-3b02-4bbb-94ea-82b760425b92/CGQQZDoFMS4xLjk="
+      ]
+     },
+     "episode_title": "",
+     "partner_program_id": ""
+    },
+    {
+     "id": 16746591,
+     "description": "Un programa de debate futbolero que busca abrirse paso en el competido terreno de la opinión deportiva en México.",
+     "tags": [],
+     "keywords": [],
+     "title": "Cuadro titular",
+     "start_time": "2026-11-12T09:00:00Z",
+     "year": "0",
+     "updated_at": "2026-08-27T22:55:14.839Z",
+     "ratings": [
+      {
+       "code": "NR",
+       "system": "mpaa",
+       "value": "NR",
+       "descriptors": []
+      }
+     ],
+     "end_time": "2026-11-12T10:00:00Z",
+     "season_number": null,
+     "episode_number": null,
+     "program_id": 300018499,
+     "images": {
+      "custom": {},
+      "background": [
+       "https://canvas-lb.tubitv.com/opts/1ZTV-z-RY0-KNQ==/c5b633f9-d734-4b11-929b-bd650fddcb14/CIAPELgIOgUxLjEuOQ=="
+      ],
+      "hero": [
+       "https://canvas-lb.tubitv.com/opts/GjcPzXLepq5toQ==/cafa37b3-585e-4565-a6aa-b09e81fe60b0/CKoDEJABOgUxLjEuOQ=="
+      ],
+      "landscape": [
+       "https://canvas-lb.tubitv.com/opts/qjhSuR9wqn1JVg==/6c072218-4402-4799-ad47-b286efd1da4f/CN4HEMcEOgUxLjEuOQ=="
+      ],
+      "poster": [
+       "https://canvas-lb.tubitv.com/opts/EY50YHfnNd85BQ==/acece2a4-dc12-48ac-a748-fd7d4ada239d/CJYDEMcEOgUxLjEuOQ=="
+      ],
+      "thumbnail": [
+       "https://canvas-lb.tubitv.com/opts/-oNNz-qw9osDcA==/16e672b7-2b4d-45e0-8c06-e0e619861c9d/CGQQZDoFMS4xLjk="
+      ]
+     },
+     "episode_title": "",
+     "partner_program_id": ""
+    }
+   ]
+  },
+  {
+   "description": "Azteca Internacional es el canal con la programación más completa y variada; entretenimiento, noticias, cultura, series de reciente estreno y mas…",
+   "title": "Azteca Internacional",
+   "lang": [
+    "Spanish"
+   ],
+   "content_id": 400000162,
+   "gracenote_id": "",
+   "publisher_id": "8cb24e9555ab4ddd66090196932bcd78",
+   "is_cdc": false,
+   "needs_login": false,
+   "images": {
+    "custom": {},
+    "background": [
+     "https://canvas-lb.tubitv.com/opts/nCpnKKygVMJPAg==/74d90b23-4186-41ba-9c6a-09941f20ebc3/CIAPELgIOgUxLjEuOQ=="
+    ],
+    "hero": [
+     "https://canvas-lb.tubitv.com/opts/t1KN6WbmyEgGnw==/74d90b23-4186-41ba-9c6a-09941f20ebc3/CJgDEIoBOgUxLjEuOQ=="
+    ],
+    "landscape": [
+     "https://canvas-lb.tubitv.com/opts/EPF8-xQoqA5ONQ==/4b5b731f-646d-4c24-9160-4e72ccb828e5/CNIHEMAEOgUxLjEuOQ=="
+    ],
+    "poster": [
+     "https://canvas-lb.tubitv.com/opts/dF_6ogJfEZQMIw==/fb66d86a-4aa7-4c52-a4cb-769026e8eb29/CJADEL4EOgUxLjEuOQ=="
+    ],
+    "thumbnail": [
+     "https://canvas-lb.tubitv.com/opts/3PxnwocWszcWVQ==/482676ff-f332-4a8c-8332-67227d87b522/CHgQeDoFMS4xLjlAAQ=="
+    ]
+   },
+   "has_subtitle": true,
+   "video_resources": [
+    {
+     "type": "hlsv3",
+     "manifest": {
+      "url": "https://live-manifest.production-public.tubi.io/live/597bc7cf-2767-4791-b05e-b70a86c3ae1c/playlist.m3u8?token=de-prueba&tb.sid=1"
+     },
+     "codec": "VIDEO_CODEC_H264",
+     "resolution": "VIDEO_RESOLUTION_720P",
+     "ssai_version": "apollo"
+    }
+   ],
+   "programs": [
+    {
+     "id": 16675304,
+     "description": "Serie que aborda temas relacionados a la situación de la mujer en la sociedad actual.",
+     "tags": [],
+     "keywords": [],
+     "title": "Mujeres rompiendo el silencio",
+     "start_time": "2026-11-12T08:00:00Z",
+     "year": "0",
+     "updated_at": "2025-03-22T00:08:25.790Z",
+     "ratings": [
+      {
+       "code": "TV-PG",
+       "system": "tvpt",
+       "value": "TV-PG",
+       "descriptors": []
+      }
+     ],
+     "end_time": "2026-11-12T09:00:00Z",
+     "season_number": null,
+     "episode_number": null,
+     "program_id": 800049815,
+     "images": {
+      "custom": {},
+      "background": [
+       "https://canvas-lb.tubitv.com/opts/nCpnKKygVMJPAg==/74d90b23-4186-41ba-9c6a-09941f20ebc3/CIAPELgIOgUxLjEuOQ=="
+      ],
+      "hero": [
+       "https://canvas-lb.tubitv.com/opts/HfczWSPdXgGF4g==/0d9d58a0-f1d3-4a67-b4b9-787a201fde29/CKoDEJABOgUxLjEuOQ=="
+      ],
+      "landscape": [
+       "https://canvas-lb.tubitv.com/opts/EPF8-xQoqA5ONQ==/4b5b731f-646d-4c24-9160-4e72ccb828e5/CNIHEMAEOgUxLjEuOQ=="
+      ],
+      "poster": [
+       "https://canvas-lb.tubitv.com/opts/dF_6ogJfEZQMIw==/fb66d86a-4aa7-4c52-a4cb-769026e8eb29/CJADEL4EOgUxLjEuOQ=="
+      ],
+      "thumbnail": [
+       "https://canvas-lb.tubitv.com/opts/3PxnwocWszcWVQ==/482676ff-f332-4a8c-8332-67227d87b522/CHgQeDoFMS4xLjlAAQ=="
+      ]
+     },
+     "episode_title": "",
+     "partner_program_id": ""
+    },
+    {
+     "id": 16676395,
+     "description": "La red de transporte es escenario y testigo de historias que animan, inspiran e invitan a la reflexión.",
+     "tags": [],
+     "keywords": [],
+     "title": "Rutas de la vida",
+     "start_time": "2026-11-12T09:00:00Z",
+     "year": "0",
+     "updated_at": "2025-03-22T00:08:25.975Z",
+     "ratings": [
+      {
+       "code": "TV-PG",
+       "system": "tvpt",
+       "value": "TV-PG",
+       "descriptors": []
+      }
+     ],
+     "end_time": "2026-11-12T10:00:00Z",
+     "season_number": null,
+     "episode_number": null,
+     "program_id": 800049819,
+     "images": {
+      "custom": {},
+      "background": [
+       "https://canvas-lb.tubitv.com/opts/nCpnKKygVMJPAg==/74d90b23-4186-41ba-9c6a-09941f20ebc3/CIAPELgIOgUxLjEuOQ=="
+      ],
+      "hero": [
+       "https://canvas-lb.tubitv.com/opts/L9H46-TKlPT3Iw==/e1b5d595-8d48-4657-8a1e-a20c0cb694aa/CKoDEJABOgUxLjEuOQ=="
+      ],
+      "landscape": [
+       "https://canvas-lb.tubitv.com/opts/EPF8-xQoqA5ONQ==/4b5b731f-646d-4c24-9160-4e72ccb828e5/CNIHEMAEOgUxLjEuOQ=="
+      ],
+      "poster": [
+       "https://canvas-lb.tubitv.com/opts/dF_6ogJfEZQMIw==/fb66d86a-4aa7-4c52-a4cb-769026e8eb29/CJADEL4EOgUxLjEuOQ=="
+      ],
+      "thumbnail": [
+       "https://canvas-lb.tubitv.com/opts/3PxnwocWszcWVQ==/482676ff-f332-4a8c-8332-67227d87b522/CHgQeDoFMS4xLjlAAQ=="
+      ]
+     },
+     "episode_title": "",
+     "partner_program_id": ""
+    }
+   ]
+  }
+ ]
+}

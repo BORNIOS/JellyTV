@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Services.Providers;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -144,7 +145,7 @@ public class SessionManagerService : BackgroundService
 
         try
         {
-            if (channelType is ChannelEntry.DirectType or ChannelEntry.FastType)
+            if (channelType is ChannelEntry.DirectType or ChannelEntry.FastType && !ProviderUrl.IsProviderUrl(upstreamUrl))
             {
                 // Directo/FAST: sin cadena de tokens — usar la URL tal cual para arranque instantaneo.
                 var isHls = upstreamUrl.Contains(".m3u8", StringComparison.OrdinalIgnoreCase);

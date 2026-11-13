@@ -120,11 +120,12 @@ public sealed class ChannelIdentityService : IDisposable
                 {
                     Name = channel.Name,
                     IptvOrgId = channel.Id,
+                    TvgId = channel.Id,
                     Country = channel.Country,
                     Website = channel.Website,
                     LogoUrl = channel.Logo,
                     Score = score,
-                    Sources = "iptvorg"
+                    Sources = "iptv-org"
                 });
             }
         }

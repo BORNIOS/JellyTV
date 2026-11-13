@@ -39,6 +39,12 @@ public static class DeliveryPolicy
             return true;
         }
 
+        // Ventana DVR desmesurada (horas de segmentos): el relay la recorta a ~60 s de vivo y el cliente arranca de inmediato.
+        if (PlaylistWindows.IsLong(source.Url))
+        {
+            return true;
+        }
+
         // Directo: Jellyfin habla con el proveedor. Sin relay, sin polling, sin remux.
         return false;
     }

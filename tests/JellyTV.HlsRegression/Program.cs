@@ -10,7 +10,11 @@ if (args.Length >= 2)
 
 TimelineRegression.Run();
 AutoGuideRegression.Run();
-if (args.Contains("--live")) await AutoGuideLiveCheck.RunAsync();
+DvrWindowRegression.Run();
+await GuideIdentityRegression.RunAsync();
+await ProviderRegression.RunAsync();
+I18nRegression.Run();
+if (args.Contains("--live")) { await AutoGuideLiveCheck.RunAsync(); await ProviderRegression.LiveCheckAsync(); }
 
 var relay = new HlsRewriterService(null!, null!, null!, null!, NullLogger<HlsRewriterService>.Instance);
 const string session = "regression-session";

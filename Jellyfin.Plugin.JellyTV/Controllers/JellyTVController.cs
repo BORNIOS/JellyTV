@@ -13,6 +13,7 @@ using Jellyfin.Plugin.JellyTV.Models;
 using Jellyfin.Plugin.JellyTV.ScheduledTask;
 using Jellyfin.Plugin.JellyTV.Services;
 using Jellyfin.Plugin.JellyTV.Services.Identity;
+using Jellyfin.Plugin.JellyTV.Services.Providers;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Model.Tasks;
 using Microsoft.AspNetCore.Authorization;
@@ -881,6 +882,103 @@ public class JellyTVController : ControllerBase
         }
     }
 
+    // ── PROVIDER CATALOG ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Lists the FAST providers channels can be imported from.
+    /// </summary>
+    /// <returns>Each provider with its note and how many of its channels are already imported.</returns>
+    [HttpGet("providers")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public IActionResult GetProviders()
+        => Ok(P.Providers.All.Select(p => new { id = p.Id, name = p.Name, imported = ProviderCatalogService.CountImported(P.Configuration, p.Id) }));
+
+    /// <summary>
+    /// Lists the catalog of a provider, as seen from the server's IP or through a proxy of the given country.
+    /// </summary>
+    /// <param name="id">Provider id.</param>
+    /// <param name="exit">Country the catalog is requested through (for example US); empty for the server's own IP.</param>
+    /// <param name="refresh">Ignores the remembered catalog.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The channels, marking those already imported.</returns>
+    [HttpGet("providers/{id}/channels")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public async Task<IActionResult> GetProviderChannels(string id, [FromQuery] string? exit, [FromQuery] bool refresh, CancellationToken ct)
+    {
+        var provider = P.Providers.Get(id);
+        if (provider is null)
+        {
+            return NotFound(new { error = "Proveedor desconocido." });
+        }
+
+        try
+        {
+            var channels = await P.Providers.ListAsync(provider, exit, refresh, ct).ConfigureAwait(false);
+            var imported = P.Configuration.Channels
+                .SelectMany(static c => c.Sources)
+                .Select(static s => ProviderUrl.TryParseChannel(s.Url, out _, out var channelId) ? channelId : string.Empty)
+                .ToHashSet(StringComparer.Ordinal);
+
+            // Muchos canales están en varios proveedores: se avisa cuando el administrador ya tiene uno con el mismo nombre.
+            var haveByName = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var own in P.Configuration.Channels)
+            {
+                var normalized = NameMatcher.Normalize(own.Name);
+                if (normalized.Length > 0)
+                {
+                    haveByName.TryAdd(normalized, own.Id);
+                }
+            }
+
+            return Ok(channels
+                .OrderBy(static c => c.Number ?? int.MaxValue)
+                .ThenBy(static c => c.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(c => new { id = c.Id, name = c.Name, number = c.Number, logo = c.Logo, group = c.Group, description = c.Description, country = c.Country, imported = imported.Contains(c.Id), similarId = imported.Contains(c.Id) ? null : haveByName.GetValueOrDefault(NameMatcher.Normalize(c.Name)), similar = !imported.Contains(c.Id) && haveByName.ContainsKey(NameMatcher.Normalize(c.Name)) }));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or System.Text.Json.JsonException or TaskCanceledException && !ct.IsCancellationRequested)
+        {
+            PluginLog.Warn($"[PROVIDER] No se pudo leer el catálogo de {provider.Name}: {ex.Message}");
+            return StatusCode(502, new { error = $"{provider.Name} no respondió: {ex.Message}" });
+        }
+    }
+
+    /// <summary>
+    /// Imports channels of a provider's catalog into the plugin and registers the provider's guide.
+    /// </summary>
+    /// <param name="id">Provider id.</param>
+    /// <param name="request">Chosen channels and optional exit country.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>How many channels were imported, how many already existed and whether the guide source was added.</returns>
+    [HttpPost("providers/{id}/import")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public async Task<IActionResult> ImportProviderChannels(string id, [FromBody] ProviderImportRequest request, CancellationToken ct)
+    {
+        var provider = P.Providers.Get(id);
+        if (provider is null || request is null || request.ChannelIds.Count == 0)
+        {
+            return BadRequest(new { error = "Elige al menos un canal de un proveedor válido." });
+        }
+
+        try
+        {
+            var catalog = await P.Providers.ListAsync(provider, request.ExitCountry, refresh: false, ct).ConfigureAwait(false);
+            var (imported, existing, backedUp, guideAdded) = ProviderCatalogService.Import(P.Configuration, provider, catalog, request.ChannelIds, request.ExitCountry, request.BackupOf);
+            if (imported + backedUp > 0)
+            {
+                Plugin.NormalizeChannels(P.Configuration, persist: false);
+                P.SaveConfiguration();
+                PluginLog.Info($"[PROVIDER] {provider.Name}: {imported} canal(es) importado(s), {backedUp} como respaldo, {existing} ya estaban{(guideAdded ? "; guía añadida" : string.Empty)}.");
+            }
+
+            return Ok(new { imported, existing, backedUp, guideAdded });
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or System.Text.Json.JsonException or TaskCanceledException && !ct.IsCancellationRequested)
+        {
+            PluginLog.Warn($"[PROVIDER] No se pudo importar de {provider.Name}: {ex.Message}");
+            return StatusCode(502, new { error = $"{provider.Name} no respondió: {ex.Message}" });
+        }
+    }
+
     // ── CHANNEL HEALTH & MANAGEMENT ──────────────────────────────────────────
 
     /// <summary>
@@ -895,8 +993,12 @@ public class JellyTVController : ControllerBase
     [Authorize(Policy = Policies.RequiresElevation)]
     public async Task<IActionResult> SearchIdentity([FromQuery] string q, [FromQuery] string? country, [FromQuery] string? tvgId, CancellationToken ct)
     {
-        var candidates = await P.ChannelIdentity.SearchAsync(q, country, tvgId, ct).ConfigureAwait(false);
-        return Ok(candidates);
+        var candidates = (await P.ChannelIdentity.SearchAsync(q, country, tvgId, ct).ConfigureAwait(false)).ToList();
+
+        // Las guías locales (Pluto, Samsung, Plex, Tubi) no usan tvg-id sino su propio id de canal: se ofrecen como un candidato
+        // más y decide el administrador. Nada se aplica solo.
+        candidates.AddRange(GuideChannelCatalog.Search(P.EpgFilter.LoadGuideChannels(P.Configuration.EpgSources), q, country, tvgId));
+        return Ok(candidates.OrderByDescending(static c => c.Score).ToList());
     }
 
     /// <summary>
@@ -1094,6 +1196,11 @@ public class JellyTVController : ControllerBase
                 return NotFound(new { error = "No channels found" });
             }
 
+            if (healthCheck.IsRunning)
+            {
+                return Conflict(new { error = "Ya hay una revisión de salud en curso" });
+            }
+
             // Execute in background
             _ = Task.Run(
                 async () =>
@@ -1103,7 +1210,7 @@ public class JellyTVController : ControllerBase
                         channel => (Enabled: channel.IsEnabled, AutoDisabled: channel.AutoDisabled),
                         StringComparer.Ordinal);
 
-                    await healthCheck.CheckConfiguredChannelsAsync("manual", channels, CancellationToken.None).ConfigureAwait(false);
+                    await healthCheck.CheckConfiguredChannelsAsync("manual", channels, true, CancellationToken.None).ConfigureAwait(false);
 
                     try
                     {
@@ -1135,6 +1242,39 @@ public class JellyTVController : ControllerBase
             return StatusCode(500, new { error = ex.Message });
         }
     }
+
+    /// <summary>Avance de la revisión de salud en curso (o de la última terminada).</summary>
+    /// <returns>Estado, fuentes comprobadas y totales.</returns>
+    [HttpGet("health-check/status")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public IActionResult GetHealthCheckStatus()
+    {
+        var healthCheck = Plugin.Instance?.ChannelHealthCheck;
+        return healthCheck is null ? StatusCode(500, new { error = "Service not available" }) : Ok(ProgressDto(healthCheck.GetProgress()));
+    }
+
+    /// <summary>Avance de la sincronización de la guía en curso (o de la última terminada).</summary>
+    /// <returns>Fase, paso actual y total.</returns>
+    [HttpGet("epg/sync/status")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    public IActionResult GetEpgSyncStatus()
+    {
+        var plugin = Plugin.Instance;
+        return plugin is null ? StatusCode(500, new { error = "Plugin no inicializado" }) : Ok(ProgressDto(plugin.EpgFilter.GetProgress()));
+    }
+
+    // Jellyfin serializa los registros en PascalCase; el panel lee estos nombres en camelCase.
+    private static object ProgressDto(TaskProgress p) => new
+    {
+        running = p.Running,
+        phase = p.Phase,
+        detail = p.Detail,
+        done = p.Done,
+        total = p.Total,
+        startedAt = p.StartedAt,
+        finishedAt = p.FinishedAt,
+        summary = p.Summary,
+    };
 
     // ── EPG LOCAL ─────────────────────────────────────────────────────────────
     // La guía XMLTV la genera el propio plugin y la sirve aquí; el usuario
@@ -1259,6 +1399,11 @@ public class JellyTVController : ControllerBase
         if (plugin is null)
         {
             return StatusCode(500, new { error = "Plugin no inicializado" });
+        }
+
+        if (plugin.EpgFilter.IsRunning)
+        {
+            return Conflict(new { error = "Ya hay una sincronización en curso" });
         }
 
         if (clean)

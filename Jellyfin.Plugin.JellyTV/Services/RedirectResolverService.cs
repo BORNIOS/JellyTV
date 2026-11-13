@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Services.Providers;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.JellyTV.Services;
@@ -58,6 +59,13 @@ public class RedirectResolverService
         string originalUrl,
         CancellationToken cancellationToken = default)
     {
+        // Una dirección interna de proveedor (Pluto, Plex, Tubi) se traduce a su dirección de hoy con el token vigente.
+        if (ProviderUrl.IsProviderUrl(originalUrl))
+        {
+            var providers = Plugin.Instance?.Providers ?? throw new InvalidOperationException("El catálogo de proveedores no está disponible.");
+            return await providers.ResolveAsync(originalUrl, cancellationToken).ConfigureAwait(false);
+        }
+
         var maxRedirects = MAXREDIRECTS;
 
         // Select one proxy for this entire resolve call (both auto and manual paths share it).

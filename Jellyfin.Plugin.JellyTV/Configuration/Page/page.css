@@ -1,0 +1,323 @@
+  #JellyTVConfigPage{
+    --jt-bg:#0b1020;
+    --jt-bg-soft:#111935;
+    --jt-card:rgba(18,26,48,.88);
+    --jt-card-2:rgba(21,31,57,.72);
+    --jt-border:rgba(124,146,196,.28);
+    --jt-border-soft:rgba(124,146,196,.16);
+    --jt-text:#dbe7ff;
+    --jt-muted:#9ab0d4;
+    --jt-accent:#74b6ff;
+    --jt-accent-2:#19a9d9;
+    --jt-good:#6bc47f;
+    --jt-warn:#f3c969;
+    --jt-bad:#ef6b6b;
+  }
+  #JellyTVConfigPage .jt-shell{
+    background:
+      radial-gradient(1200px 500px at -15% -20%, rgba(82,132,255,.24), transparent 60%),
+      radial-gradient(900px 420px at 110% 0%, rgba(104,194,255,.20), transparent 55%),
+      linear-gradient(180deg,var(--jt-bg-soft),var(--jt-bg));
+    border:1px solid rgba(144,170,225,.22);
+    border-radius:14px;
+    padding:18px;
+    color:var(--jt-text);
+  }
+  #JellyTVConfigPage h1,#JellyTVConfigPage h2,#JellyTVConfigPage h3{letter-spacing:.2px;color:var(--jt-text)}
+  #JellyTVConfigPage a{color:var(--jt-accent)}
+
+  /* ── Hero ───────────────────────────────────────────────────────────── */
+  #JellyTVConfigPage .jt-hero{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+  #JellyTVConfigPage .jt-title{margin:0;font-size:1.6rem;font-weight:700}
+  #JellyTVConfigPage .jt-subtitle{margin:4px 0 0;color:var(--jt-muted);font-size:.9rem;max-width:760px;line-height:1.45}
+  #JellyTVConfigPage .jt-chips{display:flex;gap:6px;flex-wrap:wrap}
+  #JellyTVConfigPage .jt-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;border:1px solid var(--jt-border);background:rgba(9,14,28,.55);color:var(--jt-muted);font-size:.76rem;white-space:nowrap}
+  #JellyTVConfigPage .jt-chip b{color:var(--jt-text);font-weight:600}
+  /* ── Catálogo de proveedores (acordeón) ───────────────────────────── */
+  #JellyTVConfigPage .jt-acc{display:flex;flex-direction:column;gap:10px;margin-top:12px}
+  #JellyTVConfigPage .jt-acc details{border:1px solid var(--jt-border);border-radius:10px;background:var(--jt-card-2);overflow:hidden}
+  #JellyTVConfigPage .jt-acc summary{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 14px;cursor:pointer;list-style:none;font-weight:600}
+  #JellyTVConfigPage .jt-acc summary::-webkit-details-marker{display:none}
+  #JellyTVConfigPage .jt-acc summary::before{content:"▸";display:inline-block;transition:transform .15s ease;color:var(--jt-muted)}
+  #JellyTVConfigPage .jt-acc details[open] > summary::before{transform:rotate(90deg)}
+  #JellyTVConfigPage .jt-acc .jt-acc-note{flex-basis:100%;margin-left:22px;font-weight:400}
+  #JellyTVConfigPage .jt-acc .jt-acc-body{padding:0 14px 14px}
+  #JellyTVConfigPage .jt-acc .jt-acc-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0 8px}
+  #JellyTVConfigPage .jt-acc .jt-acc-tools .inputContainer{flex:1 1 220px;margin:0}
+  #JellyTVConfigPage .jt-acc .jt-tableWrap{max-height:55vh}
+  #JellyTVConfigPage .jt-acc td img{width:56px;height:32px;object-fit:contain;border-radius:6px;background:rgba(255,255,255,.06)}
+
+  /* ── Banner ─────────────────────────────────────────────────────────── */
+  #JellyTVConfigPage .jt-banner{display:none;padding:12px 16px;border-radius:8px;margin-bottom:16px;font-weight:500;border-left:4px solid var(--jt-accent);background:rgba(13,20,38,.55);color:var(--jt-text)}
+  #JellyTVConfigPage .jt-banner.show{display:block}
+  #JellyTVConfigPage .jt-banner.ok{border-left-color:var(--jt-good);background:rgba(40,90,55,.22)}
+  #JellyTVConfigPage .jt-banner.warn{border-left-color:var(--jt-warn);background:rgba(110,88,30,.22)}
+  #JellyTVConfigPage .jt-banner.err{border-left-color:var(--jt-bad);background:rgba(110,40,45,.22)}
+
+  /* ── Tabs ───────────────────────────────────────────────────────────── */
+  #JellyTVConfigPage .jt-tabbar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px;padding:6px;border:1px solid var(--jt-border);border-radius:12px;background:rgba(9,14,28,.58);box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
+  #JellyTVConfigPage .jt-tab-btn{border-radius:8px!important;padding:8px 13px!important;border:1px solid transparent!important;background:transparent!important;color:#aebfdf!important;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:38px;white-space:nowrap;box-shadow:none!important;text-transform:none!important;transition:background .16s ease,border-color .16s ease,color .16s ease,transform .16s ease;font-weight:500}
+  #JellyTVConfigPage .jt-tab-btn[aria-selected="true"]{background:linear-gradient(135deg,#246fd0,var(--jt-accent-2))!important;border-color:rgba(156,223,255,.38)!important;color:#fff!important;box-shadow:0 5px 14px rgba(26,142,221,.27)!important}
+  #JellyTVConfigPage .jt-tab-btn:hover{transform:translateY(-1px);color:#dbe7ff!important}
+  #JellyTVConfigPage .jt-tab-content{display:none!important}
+  #JellyTVConfigPage .jt-tab-content.active{display:block!important}
+
+  /* ── Cards & grids ──────────────────────────────────────────────────── */
+  #JellyTVConfigPage .jt-card{background:var(--jt-card);border:1px solid var(--jt-border);border-radius:12px;padding:14px;box-shadow:0 10px 24px rgba(0,0,0,.2);margin-bottom:16px;backdrop-filter:blur(2px)}
+  #JellyTVConfigPage .jt-card-2{background:var(--jt-card-2)}
+  #JellyTVConfigPage .jt-card h2{margin:0 0 10px;font-size:1.05rem;font-weight:600}
+  #JellyTVConfigPage .jt-card h3{margin:14px 0 8px;font-size:.92rem;font-weight:600}
+  #JellyTVConfigPage .jt-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+  #JellyTVConfigPage .jt-muted{color:var(--jt-muted)}
+  #JellyTVConfigPage .jt-small{font-size:.78rem;line-height:1.45}
+  #JellyTVConfigPage .jt-grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0 16px}
+  #JellyTVConfigPage .jt-grid-3{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:0 16px}
+  #JellyTVConfigPage .jt-grid-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+  #JellyTVConfigPage .jt-stat{background:var(--jt-card);border:1px solid var(--jt-border);border-radius:12px;padding:14px 16px;box-shadow:0 10px 24px rgba(0,0,0,.2)}
+  #JellyTVConfigPage .jt-stat-val{font-size:1.9rem;font-weight:700;line-height:1.1;color:var(--jt-text)}
+  #JellyTVConfigPage .jt-stat-lbl{font-size:.76rem;color:var(--jt-muted);margin-top:4px;letter-spacing:.2px}
+  #JellyTVConfigPage .jt-stat.good .jt-stat-val{color:var(--jt-good)}
+  #JellyTVConfigPage .jt-stat.warn .jt-stat-val{color:var(--jt-warn)}
+  #JellyTVConfigPage .jt-stat.bad .jt-stat-val{color:var(--jt-bad)}
+  #JellyTVConfigPage .jt-stat.blue .jt-stat-val{color:var(--jt-accent)}
+
+  /* ── Toolbars & buttons ─────────────────────────────────────────────── */
+  #JellyTVConfigPage .jt-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+  #JellyTVConfigPage .jt-toolbar:first-child{margin-top:0}
+  #JellyTVConfigPage .jt-filters{display:grid;grid-template-columns:minmax(220px,1fr) minmax(150px,220px);gap:10px;align-items:end;margin-bottom:12px}
+  #JellyTVConfigPage .jt-secondary{background:rgba(20,30,55,.9)!important;color:var(--jt-muted)!important;border:1px solid var(--jt-border)!important;box-shadow:none!important}
+  #JellyTVConfigPage .jt-secondary:hover{color:var(--jt-text)!important;border-color:rgba(144,170,225,.5)!important}
+  #JellyTVConfigPage .button-submit.raised.emby-button{background:linear-gradient(135deg,#246fd0,var(--jt-accent-2))!important;border:1px solid rgba(156,223,255,.38)!important;color:#fff!important;box-shadow:0 5px 14px rgba(26,142,221,.27)!important}
+  #JellyTVConfigPage .button-cancel.raised.emby-button{background:rgba(120,35,45,.45)!important;border:1px solid rgba(239,107,107,.45)!important;color:#ffd9d9!important;box-shadow:none!important}
+  #JellyTVConfigPage .jt-actions{display:flex;gap:4px;flex-wrap:wrap}
+  #JellyTVConfigPage .jt-actions .emby-button{padding:3px 8px!important;min-width:0!important;font-size:.74em!important;white-space:nowrap}
+  #JellyTVConfigPage .jt-link{background:none;border:none;padding:0;color:var(--jt-accent);cursor:pointer;font:inherit;font-size:.85rem}
+
+  /* ── URLs ───────────────────────────────────────────────────────────── */
+  #JellyTVConfigPage .jt-url-list{display:flex;flex-direction:column;gap:8px}
+  #JellyTVConfigPage .jt-url-row{display:grid;grid-template-columns:110px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 11px;border:1px solid var(--jt-border-soft);border-radius:8px;background:rgba(9,14,28,.42)}
+  #JellyTVConfigPage .jt-url-label{font-size:.76rem;color:var(--jt-muted);text-transform:uppercase;letter-spacing:.5px}
+  #JellyTVConfigPage .jt-url{font-family:Consolas,monospace;font-size:.82rem;color:var(--jt-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* ── Tables ─────────────────────────────────────────────────────────── */
+  #JellyTVConfigPage .jt-tableWrap{overflow:auto;border:1px solid var(--jt-border-soft);border-radius:10px;margin-top:10px;max-height:70vh}
+  #JellyTVConfigPage .jt-table{width:100%;border-collapse:separate;border-spacing:0;min-width:680px}
+  #JellyTVConfigPage .jt-table th{position:sticky;top:0;z-index:1;padding:9px 11px;text-align:left;font-size:.76rem;font-weight:600;color:var(--jt-muted);background:#131c36;border-bottom:1px solid var(--jt-border);white-space:nowrap}
+  #JellyTVConfigPage .jt-table td{padding:9px 11px;border-bottom:1px solid var(--jt-border-soft);vertical-align:middle;font-size:.86rem}
+  #JellyTVConfigPage .jt-table tbody tr:hover td{background:rgba(116,182,255,.06)}
+  #JellyTVConfigPage .jt-table tr:last-child td{border-bottom:none}
+  #JellyTVConfigPage .jt-empty{text-align:center;color:var(--jt-muted);padding:26px!important}
+  #JellyTVConfigPage .jt-sort-ind{opacity:.35;font-size:.8em}
+  #JellyTVConfigPage th[data-sort]{cursor:pointer;user-select:none}
+  #JellyTVConfigPage th[data-sort]:hover{color:var(--jt-text)}
+  #JellyTVConfigPage .jt-progress{height:22px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid var(--jt-border-soft);overflow:hidden;margin-top:12px}
+  #JellyTVConfigPage .jt-progress-bar{height:100%;width:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:.72rem;font-weight:700;white-space:nowrap;border-radius:999px;background:linear-gradient(135deg,#246fd0,var(--jt-accent-2));transition:width .4s ease}
+  #JellyTVConfigPage .jt-progress.indet .jt-progress-bar{width:35%;animation:jt-indet 1.2s ease-in-out infinite}
+  @keyframes jt-indet{0%{margin-left:-35%}100%{margin-left:100%}}
+  @media (prefers-reduced-motion:reduce){#JellyTVConfigPage .jt-progress-bar{transition:none}#JellyTVConfigPage .jt-progress.indet .jt-progress-bar{animation:none;width:100%;opacity:.5}}
+  #JellyTVConfigPage .jt-status{min-height:1em;font-size:.82rem;margin-top:8px;color:var(--jt-muted)}
+
+  /* ── Badges ─────────────────────────────────────────────────────────── */
+  #JellyTVConfigPage .jt-badge{display:inline-block;font-size:.72em;padding:2px 8px;border-radius:20px;font-weight:600;white-space:nowrap;border:1px solid transparent}
+  #JellyTVConfigPage .jt-badge-green{background:rgba(107,196,127,.14);color:var(--jt-good);border-color:rgba(107,196,127,.28)}
+  #JellyTVConfigPage .jt-badge-red{background:rgba(239,107,107,.14);color:var(--jt-bad);border-color:rgba(239,107,107,.28)}
+  #JellyTVConfigPage .jt-badge-gray{background:rgba(255,255,255,.07);color:var(--jt-muted);border-color:rgba(255,255,255,.10)}
+  #JellyTVConfigPage .jt-badge-blue{background:rgba(116,182,255,.14);color:var(--jt-accent);border-color:rgba(116,182,255,.28)}
+  #JellyTVConfigPage .jt-badge-yellow{background:rgba(243,201,105,.14);color:var(--jt-warn);border-color:rgba(243,201,105,.28)}
+
+  /* ── Panels / editors ───────────────────────────────────────────────── */
+  #JellyTVConfigPage .jt-panel{margin-top:12px;padding:14px;border-radius:10px;border:1px solid var(--jt-border);background:var(--jt-card-2)}
+  #JellyTVConfigPage .jt-panel h4{margin:0 0 10px;font-size:.92rem;font-weight:600;color:var(--jt-text)}
+  #JellyTVConfigPage .jt-list-row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--jt-border-soft)}
+  #JellyTVConfigPage .jt-list-row:last-child{border-bottom:none}
+  #JellyTVConfigPage .jt-checks{display:flex;gap:20px;flex-wrap:wrap;margin:.75em 0 .25em}
+
+  /* ── Modal ──────────────────────────────────────────────────────────── */
+  #JellyTVConfigPage .jt-m-overlay{display:none;position:fixed;inset:0;background:rgba(4,8,18,.72);backdrop-filter:blur(3px);z-index:9999;align-items:center;justify-content:center;padding:14px}
+  #JellyTVConfigPage .jt-m-overlay.open{display:flex}
+  #JellyTVConfigPage .jt-m{background:linear-gradient(180deg,#16203c,#101729);border:1px solid var(--jt-border);border-radius:14px;width:100%;max-width:680px;margin:0;box-shadow:0 24px 70px rgba(0,0,0,.6);display:flex;flex-direction:column;max-height:92vh;overflow:hidden}
+  #JellyTVConfigPage .jt-m-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 20px 14px;border-bottom:1px solid var(--jt-border-soft);background:rgba(9,14,28,.45)}
+  #JellyTVConfigPage .jt-m-title{margin:0;font-size:1.05rem;font-weight:600}
+  #JellyTVConfigPage .jt-m-close{background:none;border:none;color:var(--jt-muted);font-size:1.5em;line-height:1;cursor:pointer;padding:2px 8px;border-radius:6px;transition:color .15s,background .15s}
+  #JellyTVConfigPage .jt-m-close:hover{color:#fff;background:rgba(255,255,255,.08)}
+  #JellyTVConfigPage .jt-m-body{padding:18px 20px 4px;overflow-y:auto}
+  #JellyTVConfigPage .jt-m-sec{margin-bottom:18px}
+  #JellyTVConfigPage .jt-m-sec h4{display:flex;align-items:center;gap:10px;margin:0 0 12px;font-size:.74em;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--jt-muted)}
+  #JellyTVConfigPage .jt-m-sec h4::after{content:"";flex:1;height:1px;background:var(--jt-border-soft)}
+  #JellyTVConfigPage .jt-m-grid{display:grid;grid-template-columns:1fr 1fr;column-gap:18px;row-gap:2px}
+  #JellyTVConfigPage .jt-m-full{grid-column:1/-1}
+  #JellyTVConfigPage .jt-id-card{display:flex;align-items:center;gap:14px;padding:12px;border:1px solid var(--jt-border-soft);border-radius:10px;background:rgba(9,14,28,.45);margin-bottom:12px}
+  #JellyTVConfigPage .jt-id-logo{width:56px;height:56px;flex:0 0 56px;object-fit:contain;border-radius:8px;background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;color:var(--jt-muted);font-size:.7em}
+  #JellyTVConfigPage .jt-id-info{flex:1;min-width:0}
+  #JellyTVConfigPage .jt-id-name{font-weight:600;color:var(--jt-text)}
+  #JellyTVConfigPage .jt-id-results{display:none;margin:-4px 0 12px;border:1px solid var(--jt-border-soft);border-radius:10px;overflow:hidden}
+  #JellyTVConfigPage .jt-id-results.open{display:block}
+  #JellyTVConfigPage .jt-id-item{display:flex;align-items:center;gap:12px;padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--jt-border-soft);background:rgba(9,14,28,.35)}
+  #JellyTVConfigPage .jt-id-item:last-child{border-bottom:0}
+  #JellyTVConfigPage .jt-id-item:hover{background:rgba(116,182,255,.10)}
+  #JellyTVConfigPage .jt-id-item img{width:34px;height:34px;object-fit:contain;border-radius:6px;background:rgba(255,255,255,.06)}
+  #JellyTVConfigPage .jt-id-empty{padding:12px;color:var(--jt-muted);font-size:.85em}
+  #JellyTVConfigPage .jt-m-hint{font-size:.78em;line-height:1.45;color:var(--jt-muted);margin-top:4px}
+  #JellyTVConfigPage .jt-m-opt{display:none;margin-top:10px;padding:12px 14px;border:1px solid var(--jt-border);border-radius:8px;background:rgba(116,182,255,.05)}
+  #JellyTVConfigPage .jt-m-opt.show{display:block}
+  #JellyTVConfigPage .jt-m-opt .jt-m-hint{margin-top:6px}
+  #JellyTVConfigPage .jt-req{color:var(--jt-bad);font-weight:700}
+  #JellyTVConfigPage .jt-m-foot{display:flex;justify-content:flex-end;gap:10px;padding:14px 20px 18px;border-top:1px solid var(--jt-border-soft);margin-top:6px;background:rgba(9,14,28,.35)}
+  #JellyTVConfigPage .jt-textarea{width:100%;box-sizing:border-box;min-height:76px;background:rgba(0,0,0,.28);color:inherit;border:1px solid var(--jt-border);border-radius:8px;padding:8px 10px;font-family:Consolas,monospace;font-size:.85em;resize:vertical}
+  #JellyTVConfigPage .jt-src-card{border:1px solid var(--jt-border-soft);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:rgba(9,14,28,.35)}
+  #JellyTVConfigPage .jt-src-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px}
+  #JellyTVConfigPage .jt-src-title{font-size:.84rem;font-weight:600;color:var(--jt-text)}
+
+  /* ── Toasts & dialog ────────────────────────────────────────────────── */
+  #JellyTVConfigPage .jt-toasts{position:fixed;right:18px;bottom:18px;z-index:10050;display:flex;flex-direction:column;gap:8px;max-width:380px}
+  #JellyTVConfigPage .jt-toast{padding:11px 14px;border-radius:9px;border:1px solid var(--jt-border);background:linear-gradient(180deg,#17213e,#101729);color:var(--jt-text);box-shadow:0 14px 38px rgba(0,0,0,.5);font-size:.86rem;animation:jtToastIn .18s ease}
+  #JellyTVConfigPage .jt-toast.ok{border-left:4px solid var(--jt-good)}
+  #JellyTVConfigPage .jt-toast.warn{border-left:4px solid var(--jt-warn)}
+  #JellyTVConfigPage .jt-toast.err{border-left:4px solid var(--jt-bad)}
+  @keyframes jtToastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  #JellyTVConfigPage dialog.jt-dialog{border:1px solid var(--jt-border);border-radius:14px;background:linear-gradient(180deg,#16203c,#101729);color:var(--jt-text);max-width:440px;width:calc(100% - 32px);padding:0;box-shadow:0 24px 70px rgba(0,0,0,.6)}
+  #JellyTVConfigPage dialog.jt-dialog::backdrop{background:rgba(4,8,18,.72);backdrop-filter:blur(3px)}
+  #JellyTVConfigPage .jt-dlg-head{padding:16px 20px 10px;font-size:1.02rem;font-weight:600}
+  #JellyTVConfigPage .jt-dlg-body{padding:0 20px 16px;color:var(--jt-muted);font-size:.9rem;line-height:1.5}
+  #JellyTVConfigPage .jt-dlg-foot{display:flex;justify-content:flex-end;gap:10px;padding:12px 20px 16px;border-top:1px solid var(--jt-border-soft)}
+
+  #JellyTVConfigPage #channelModal .emby-input{width:100%}
+  @media (max-width:720px){
+    #JellyTVConfigPage .jt-shell{padding:12px}
+    #JellyTVConfigPage .jt-filters{grid-template-columns:1fr}
+    #JellyTVConfigPage .jt-url-row{grid-template-columns:1fr;gap:6px}
+    #JellyTVConfigPage .jt-url{white-space:normal;word-break:break-all}
+  }
+  @media (max-width:560px){
+    #JellyTVConfigPage .jt-m-grid{grid-template-columns:1fr}
+    #JellyTVConfigPage .jt-m-foot{flex-direction:column}
+    #JellyTVConfigPage .jt-m-foot .emby-button{width:100%}
+  }
+  
+/* ── Layout: aprovechar toda la pantalla ─────────────────────────────── */
+#JellyTVConfigPage form{max-width:none!important}
+#JellyTVConfigPage .jt-shell{padding:clamp(14px,2vw,32px);max-width:none}
+#JellyTVConfigPage .jt-tab-content.active{animation:jtFade .18s ease}
+@keyframes jtFade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+#JellyTVConfigPage #jt-tab-settings.active{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(min(100%,560px),1fr));gap:16px;align-items:start}
+#JellyTVConfigPage #jt-tab-settings .jt-card{margin-bottom:0}
+#JellyTVConfigPage #jt-tab-settings .jt-card-wide,#JellyTVConfigPage #jt-tab-settings > .jt-toolbar{grid-column:1/-1}
+#JellyTVConfigPage .jt-card{padding:clamp(14px,1.4vw,22px)}
+#JellyTVConfigPage .jt-card h2{font-size:1.12rem}
+#JellyTVConfigPage .jt-hero{align-items:center}
+#JellyTVConfigPage .jt-title{font-size:clamp(1.5rem,2.2vw,2rem)}
+
+/* ── Controles: un solo lenguaje visual ──────────────────────────────── */
+#JellyTVConfigPage .inputContainer{margin-bottom:14px;max-width:none!important}
+#JellyTVConfigPage .inputLabel{display:block;position:static!important;transform:none!important;margin:0 0 6px;font-size:.78rem;font-weight:600;letter-spacing:.2px;color:var(--jt-muted)!important}
+#JellyTVConfigPage .emby-input,#JellyTVConfigPage select.emby-select,#JellyTVConfigPage .jt-textarea{
+  box-sizing:border-box;width:100%;height:42px;padding:0 14px!important;border-radius:10px!important;
+  background:rgba(7,12,26,.72)!important;color:var(--jt-text)!important;border:1px solid var(--jt-border)!important;
+  font-size:.92rem;line-height:1.2;box-shadow:none!important;transition:border-color .15s,box-shadow .15s}
+#JellyTVConfigPage .jt-textarea{height:auto;padding:10px 14px!important;min-height:84px}
+#JellyTVConfigPage .emby-input:hover,#JellyTVConfigPage select.emby-select:hover,#JellyTVConfigPage .jt-textarea:hover{border-color:rgba(144,170,225,.5)!important}
+#JellyTVConfigPage .emby-input:focus,#JellyTVConfigPage select.emby-select:focus,#JellyTVConfigPage .jt-textarea:focus{outline:none;border-color:var(--jt-accent)!important;box-shadow:0 0 0 3px rgba(116,182,255,.2)!important}
+#JellyTVConfigPage select.emby-select{appearance:none;-webkit-appearance:none;padding-right:40px!important;cursor:pointer;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%239ab0d4' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>")!important;
+  background-repeat:no-repeat!important;background-position:right 12px center!important;background-size:18px!important}
+#JellyTVConfigPage select.emby-select option{background:#101729;color:var(--jt-text)}
+#JellyTVConfigPage .selectArrowContainer{display:none!important}
+#JellyTVConfigPage .fieldDescription{margin-top:6px;font-size:.78rem;line-height:1.5;color:var(--jt-muted)}
+#JellyTVConfigPage .checkboxContainer{margin:6px 0}
+
+/* ── Botones: mismo tamaño en toda la página ─────────────────────────── */
+#JellyTVConfigPage .emby-button.raised{min-height:40px;padding:0 18px!important;font-size:.88rem!important;font-weight:600;border-radius:10px!important;text-transform:none!important;letter-spacing:.2px;margin:0}
+#JellyTVConfigPage .jt-actions{gap:6px;flex-wrap:nowrap}
+#JellyTVConfigPage .jt-actions .emby-button.raised{min-height:32px;padding:0 12px!important;font-size:.8rem!important;border-radius:8px!important}
+#JellyTVConfigPage .jt-toolbar{gap:10px}
+
+/* ── Tablas ──────────────────────────────────────────────────────────── */
+#JellyTVConfigPage .jt-tableWrap{max-height:none}
+#JellyTVConfigPage .jt-table th{padding:12px 16px;font-size:.78rem}
+#JellyTVConfigPage .jt-table td{padding:12px 16px;font-size:.92rem}
+#JellyTVConfigPage .jt-table td img{width:76px!important;height:42px!important;border-radius:6px!important;object-fit:contain!important;background:rgba(255,255,255,.06)!important}
+#JellyTVConfigPage .jt-filters{grid-template-columns:minmax(220px,1fr) minmax(180px,280px)}
+#JellyTVConfigPage .jt-badge{font-size:.76rem;padding:3px 10px}
+
+/* ── Modal ───────────────────────────────────────────────────────────── */
+#JellyTVConfigPage .jt-m{max-width:min(960px,96vw);max-height:94vh}
+#JellyTVConfigPage .jt-m-body{padding:20px 24px 6px}
+#JellyTVConfigPage .jt-m-head,#JellyTVConfigPage .jt-m-foot{padding-left:24px;padding-right:24px}
+#JellyTVConfigPage .jt-m-grid{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:20px}
+#JellyTVConfigPage .jt-id-logo{width:112px;height:63px;flex-basis:112px}
+
+/* ── Móvil / tablet ──────────────────────────────────────────────────── */
+@media (max-width:900px){
+  #JellyTVConfigPage .jt-tabbar{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin}
+  #JellyTVConfigPage .jt-tab-btn{flex:0 0 auto}
+  #JellyTVConfigPage .jt-table th:nth-child(4),#JellyTVConfigPage .jt-table td:nth-child(4){display:none}
+  #JellyTVConfigPage .jt-table{min-width:0}
+  #JellyTVConfigPage .jt-m-grid{grid-template-columns:1fr}
+}
+@media (max-width:640px){
+  #JellyTVConfigPage .jt-m-overlay{padding:0}
+  #JellyTVConfigPage .jt-m{max-width:100vw;width:100vw;height:100vh;max-height:100vh;border-radius:0}
+  #JellyTVConfigPage .jt-actions{flex-wrap:wrap}
+  #JellyTVConfigPage .jt-id-card{flex-wrap:wrap}
+  #JellyTVConfigPage .jt-chips{width:100%}
+}
+
+/* ── Checkboxes con el mismo lenguaje visual ─────────────────────────── */
+#JellyTVConfigPage .checkboxContainer{display:flex;align-items:center;gap:10px;margin:6px 0}
+#JellyTVConfigPage .checkboxContainer input[type=checkbox]{appearance:none;-webkit-appearance:none;flex:0 0 20px;width:20px;height:20px;margin:0;display:grid;place-content:center;cursor:pointer;
+  border:1px solid var(--jt-border);border-radius:6px;background:rgba(7,12,26,.72);transition:background .15s,border-color .15s,box-shadow .15s}
+#JellyTVConfigPage .checkboxContainer input[type=checkbox]:hover{border-color:rgba(144,170,225,.6)}
+#JellyTVConfigPage .checkboxContainer input[type=checkbox]:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(116,182,255,.25)}
+#JellyTVConfigPage .checkboxContainer input[type=checkbox]:checked{background:linear-gradient(135deg,#246fd0,var(--jt-accent-2));border-color:rgba(156,223,255,.5)}
+#JellyTVConfigPage .checkboxContainer input[type=checkbox]:checked::after{content:"";width:5px;height:10px;border:solid #fff;border-width:0 2px 2px 0;transform:translate(0,-1px) rotate(45deg)}
+#JellyTVConfigPage .checkboxContainer .checkboxLabel{padding:0!important;margin:0!important;font-size:.9rem!important;line-height:1.3;color:var(--jt-text)!important;cursor:pointer}
+#JellyTVConfigPage .checkboxContainer .checkboxLabel::before,#JellyTVConfigPage .checkboxContainer .checkboxLabel::after{display:none!important}
+#JellyTVConfigPage .jt-src-opts{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:flex-end;margin-top:6px}
+#JellyTVConfigPage .jt-src-opts .inputContainer{flex:0 1 220px;margin-bottom:0}
+#JellyTVConfigPage .jt-src-opts .checkboxContainer{margin:0 0 10px}
+#JellyTVConfigPage .jt-logo-ph{width:76px;height:42px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--jt-muted);background:rgba(255,255,255,.06);letter-spacing:.5px}
+
+/* ── Móvil: la tabla de canales conserva solo lo esencial ────────────── */
+@media (max-width:900px){
+  #JellyTVConfigPage .jt-filters{grid-template-columns:1fr}
+}
+@media (max-width:640px){
+  #JellyTVConfigPage #jt-tab-channels .jt-table th:nth-child(1),#JellyTVConfigPage #jt-tab-channels .jt-table td:nth-child(1),
+  #JellyTVConfigPage #jt-tab-channels .jt-table th:nth-child(3),#JellyTVConfigPage #jt-tab-channels .jt-table td:nth-child(3),
+  #JellyTVConfigPage #jt-tab-channels .jt-table th:nth-child(6),#JellyTVConfigPage #jt-tab-channels .jt-table td:nth-child(6){display:none}
+  #JellyTVConfigPage .jt-table th,#JellyTVConfigPage .jt-table td{padding:10px 10px}
+  #JellyTVConfigPage .jt-actions{flex-wrap:wrap}
+  #JellyTVConfigPage .jt-card-head .jt-toolbar{width:100%}
+  #JellyTVConfigPage .jt-card-head .jt-toolbar .emby-button{flex:1 1 auto}
+  #JellyTVConfigPage #jt-tab-settings.active{grid-template-columns:1fr}
+}
+
+/* ── Barra de pestañas proporcionada, ajustes en tarjetas fluidas y avisos ── */
+#JellyTVConfigPage .jt-tabbar{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;padding:5px;margin-bottom:20px;overflow:visible}
+#JellyTVConfigPage .jt-tab-btn{min-height:40px!important;width:100%;padding:0 12px!important;font-size:.9rem!important;font-weight:600;white-space:nowrap}
+#JellyTVConfigPage .jt-tab-btn:hover{transform:none;background:rgba(116,182,255,.1)!important}
+#JellyTVConfigPage .jt-tab-btn[aria-selected="true"]:hover{background:linear-gradient(135deg,#246fd0,var(--jt-accent-2))!important}
+#JellyTVConfigPage .jt-hero{margin-bottom:18px}
+#JellyTVConfigPage .jt-subtitle{max-width:80ch}
+#JellyTVConfigPage #jt-tab-settings.active{display:block!important;column-count:2;column-gap:16px}
+#JellyTVConfigPage #jt-tab-settings .jt-card{box-sizing:border-box;display:inline-block;width:100%;margin:0 0 16px;break-inside:avoid;-webkit-column-break-inside:avoid;vertical-align:top}
+#JellyTVConfigPage #jt-tab-settings .jt-card-wide,#JellyTVConfigPage #jt-tab-settings > .jt-toolbar{column-span:all}
+#JellyTVConfigPage #jt-tab-settings > .jt-toolbar{display:flex;justify-content:flex-end;margin-top:4px}
+#JellyTVConfigPage .jt-card h2{display:flex;align-items:center;gap:8px;margin:0 0 4px}
+#JellyTVConfigPage .jt-card h2+.fieldDescription,#JellyTVConfigPage .jt-card h2+p{margin:0 0 14px}
+#JellyTVConfigPage .jt-toasts{width:min(400px,calc(100vw - 36px));pointer-events:none}
+#JellyTVConfigPage .jt-toast{pointer-events:auto;display:flex;gap:10px;align-items:flex-start;line-height:1.45;overflow-wrap:anywhere;border-left-width:4px;border-left-style:solid}
+#JellyTVConfigPage .jt-toast.info{border-left-color:#42a5f5}
+#JellyTVConfigPage .jt-toast-ic{flex:0 0 20px;width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:.78rem;font-weight:700;background:rgba(255,255,255,.1);margin-top:1px}
+#JellyTVConfigPage .jt-toast.ok .jt-toast-ic{background:rgba(107,196,127,.2);color:var(--jt-good)}
+#JellyTVConfigPage .jt-toast.warn .jt-toast-ic{background:rgba(243,201,105,.2);color:var(--jt-warn)}
+#JellyTVConfigPage .jt-toast.err .jt-toast-ic{background:rgba(255,112,112,.2);color:var(--jt-bad)}
+#JellyTVConfigPage .jt-toast-tx{flex:1}
+#JellyTVConfigPage .jt-toast-x{flex:0 0 auto;background:transparent;border:0;color:var(--jt-muted);cursor:pointer;font-size:1.1rem;line-height:1;padding:0 2px}
+#JellyTVConfigPage .jt-toast-x:hover{color:#fff}
+@media (max-width:1100px){#JellyTVConfigPage #jt-tab-settings.active{column-count:1}}
+@media (max-width:900px){
+  #JellyTVConfigPage .jt-tabbar{flex-wrap:initial;overflow:visible}
+  #JellyTVConfigPage .jt-tab-btn{flex:initial;padding:0 8px!important}
+  #JellyTVConfigPage .jt-tab-label{display:none}
+}

@@ -41,10 +41,43 @@
     <PackageReference Include="SmartAnalyzers.MultithreadingAnalyzer" Version="1.1.31" PrivateAssets="All" />
   </ItemGroup>
 
+  <!-- The config page is authored as pieces in Configuration/Page (shell, css, i18n, app) and joined into the single
+       configPage.html that Jellyfin serves; the shell marks each piece with an include comment. -->
+  <UsingTask TaskName="JoinConfigPage" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Folder ParameterType="System.String" Required="true" />
+      <Output ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.IO" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        var page = File.ReadAllText(Path.Combine(Folder, "page.html"));
+        foreach (var piece in new[] { "page.css", "i18n.js", "app.js" })
+        {
+            var marker = new System.Text.RegularExpressions.Regex("<!--@include " + piece + @"-->\r?\n");
+            if (!marker.IsMatch(page)) { Log.LogError("page.html no incluye " + piece); return false; }
+            var text = File.ReadAllText(Path.Combine(Folder, piece));
+            page = marker.Replace(page, m => text);
+        }
+        Directory.CreateDirectory(Path.GetDirectoryName(Output));
+        File.WriteAllText(Output, page);
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
   <ItemGroup>
-    <!-- configPage.html follows the official plugin template layout (Configuration/). -->
-    <EmbeddedResource Include="Configuration\configPage.html" />
+    <JellyTvPagePiece Include="Configuration\Page\*" />
   </ItemGroup>
+
+  <Target Name="JoinConfigPage" BeforeTargets="AssignTargetPaths" Inputs="@(JellyTvPagePiece)" Outputs="$(IntermediateOutputPath)configPage.html">
+    <JoinConfigPage Folder="$(MSBuildProjectDirectory)\Configuration\Page" Output="$(MSBuildProjectDirectory)\$(IntermediateOutputPath)configPage.html" />
+  </Target>
+
+  <Target Name="EmbedConfigPage" BeforeTargets="AssignTargetPaths" DependsOnTargets="JoinConfigPage">
+    <ItemGroup>
+      <EmbeddedResource Include="$(IntermediateOutputPath)configPage.html" LogicalName="Jellyfin.Plugin.JellyTV.Configuration.configPage.html" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <InternalsVisibleTo Include="JellyTV.HlsRegression" />

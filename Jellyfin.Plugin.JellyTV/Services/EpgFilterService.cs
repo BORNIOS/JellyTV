@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
 using Jellyfin.Plugin.JellyTV.Models;
+using Jellyfin.Plugin.JellyTV.Services.Providers;
 using Jellyfin.Plugin.JellyTV.Services.Storage;
 using Jellyfin.Plugin.JellyTV.Services.Tmdb;
 using Microsoft.Extensions.Logging;
@@ -40,6 +41,12 @@ public class EpgFilterService
     private readonly OwnGuideService _ownGuide;
     private readonly AutoGuideCatalog _autoGuide;
 
+    // Avance de la sincronización en curso, para la barra del panel.
+    private TaskProgress _progress = TaskProgress.Idle;
+    private int _running;
+    private int _progressTotal;
+    private DateTimeOffset _syncStartedAt;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="EpgFilterService"/> class.
     /// </summary>
@@ -58,6 +65,9 @@ public class EpgFilterService
     /// <summary>Gets ruta absoluta del archivo XMLTV fusionado que sirve la guía local.</summary>
     public string EpgFilePath => _epgFilePath;
 
+    /// <summary>Gets a value indicating whether a guide sync is running.</summary>
+    public bool IsRunning => Volatile.Read(ref _running) == 1;
+
     /// <summary>Gets ruta del informe de la última sincronización (qué fuente fue la principal de cada canal).</summary>
     internal string ReportPath => Path.Combine(Path.GetDirectoryName(_epgFilePath) ?? string.Empty, "guide-report.json");
 
@@ -70,6 +80,44 @@ public class EpgFilterService
     /// <param name="ct">Token de cancelación.</param>
     /// <returns>Resultado del sync.</returns>
     public async Task<EpgSyncResult> SyncLocalGuideAsync(CancellationToken ct = default)
+    {
+        if (Interlocked.CompareExchange(ref _running, 1, 0) == 1)
+        {
+            return new EpgSyncResult { Error = "Ya hay una sincronización en curso" };
+        }
+
+        var startedAt = DateTimeOffset.UtcNow;
+        _syncStartedAt = startedAt;
+        SetProgress("Preparando fuentes", string.Empty, 0, 0);
+        try
+        {
+            var result = await RunSyncAsync(ct).ConfigureAwait(false);
+            var summary = result.Success ? $"{result.Sources.Count(static s => s.Success)} fuente(s) · {result.TvgIdsFound} canal(es) con tvg-id" : result.Error ?? "Sin cambios";
+            Volatile.Write(ref _progress, new TaskProgress(false, string.Empty, string.Empty, _progressTotal, _progressTotal, startedAt, DateTimeOffset.UtcNow, summary));
+            return result;
+        }
+        catch
+        {
+            Volatile.Write(ref _progress, new TaskProgress(false, string.Empty, string.Empty, 0, 0, startedAt, DateTimeOffset.UtcNow, "Interrumpida"));
+            throw;
+        }
+        finally
+        {
+            Volatile.Write(ref _running, 0);
+        }
+    }
+
+    /// <summary>Gets the progress of the running (or last finished) guide sync.</summary>
+    /// <returns>Progress snapshot.</returns>
+    public TaskProgress GetProgress() => Volatile.Read(ref _progress);
+
+    private void SetProgress(string phase, string detail, int done, int total)
+    {
+        _progressTotal = total;
+        Volatile.Write(ref _progress, new TaskProgress(true, phase, detail, done, total, _syncStartedAt, null, null));
+    }
+
+    private async Task<EpgSyncResult> RunSyncAsync(CancellationToken ct)
     {
         var config = Plugin.Instance?.Configuration;
         var result = new EpgSyncResult();
@@ -103,6 +151,12 @@ public class EpgFilterService
 
         PluginLog.Info($"[EPG] {targets.Count} canal(es) necesitan guía ({result.TvgIdsFound} con tvg-id, {ownChannels.Count} con guía propia)");
 
+        // Pasos reales: una descarga por fuente, una consulta por guía propia y tres etapas finales
+        // (fusionar, enriquecer, escribir). Las guías propias automáticas se suman cuando aparecen.
+        var totalSteps = epgSources.Count + ownChannels.Count + 3;
+        var step = 0;
+        void Step(string phase, string detail) => SetProgress(phase, detail, Math.Min(step++, totalSteps), totalSteps);
+
         var tmdbService = Plugin.Instance?.TmdbEnrichment;
         var hasTmdb = tmdbService != null && !string.IsNullOrWhiteSpace(config.TmdbApiKey);
         var tmdbCtx = hasTmdb ? tmdbService!.CreateRunContext() : null;
@@ -126,10 +180,11 @@ public class EpgFilterService
         {
             var sourceResult = new EpgSourceSyncResult { SourceId = epgSource.Id, SourceName = epgSource.Name };
             FilteredSource? content = null;
+            Step("Descargando guías", epgSource.Name);
             try
             {
                 PluginLog.Info($"[EPG] Processing source '{epgSource.Name}' ({epgSource.Url})");
-                content = await DownloadFilteredAsync(epgSource.Url, targets, channelCtx, ct).ConfigureAwait(false);
+                content = await DownloadFilteredAsync(epgSource.Url, targets, channelCtx, channels => RememberGuideChannels(config, epgSource, channels), ct).ConfigureAwait(false);
                 SaveCache(epgSource.Id, content);
                 sourceResult.Success = true;
                 epgSource.LastSyncedAt = DateTimeOffset.UtcNow;
@@ -174,11 +229,14 @@ public class EpgFilterService
         var zone = ResolveZone(config.EpgTimezone);
         if (config.AutoGuideEnabled)
         {
+            var before = ownChannels.Count;
             await AddAutomaticOwnGuidesAsync(config, gathered.SelectMany(static g => g.Content.Channels).Select(static f => f.Id), ownChannels, ct).ConfigureAwait(false);
+            totalSteps += ownChannels.Count - before;
         }
 
         foreach (var channel in ownChannels)
         {
+            Step("Guías de las webs de canal", channel.Name);
             var key = EpgChannelMatcher.KeyFor(channel);
             var kind = EpgClassifier.ClassifyChannel(channel.Name, channel.Category);
             var own = await _ownGuide.FetchAsync(channel, key, NormalizeCountry(channel.Country), kind, zone, config.HtmlGuideRecipesJson, ct).ConfigureAwait(false);
@@ -203,6 +261,7 @@ public class EpgFilterService
         }
 
         // 2. Por canal: elegir la fuente principal y completar los huecos con las demás.
+        Step("Fusionando fuentes", string.Empty);
         var nowUtc = DateTimeOffset.UtcNow;
         var perKey = new Dictionary<string, List<GuideCandidate>>(StringComparer.OrdinalIgnoreCase);
         var channelXml = new Dictionary<(string SourceId, string Key), ChannelFragment>();
@@ -298,6 +357,7 @@ public class EpgFilterService
             published.Add((key, records));
         }
 
+        Step(tmdbCtx != null ? "Enriqueciendo con TMDB" : "Validando imágenes", string.Empty);
         if (tmdbCtx != null && tmdbService != null && allRecords.Count > 0)
         {
             var stats = await tmdbService.EnrichXmlProgrammesAsync(allRecords, tmdbCtx, ct).ConfigureAwait(false);
@@ -311,6 +371,7 @@ public class EpgFilterService
         // Las imágenes que publican las fuentes pueden estar caducadas (Jellyfin respondería 500) y hay que anotar su forma.
         await EpgIconValidator.ValidateAsync(allRecords, _httpClientFactory.CreateClient("JellyTV"), ct).ConfigureAwait(false);
 
+        Step("Escribiendo la guía", string.Empty);
         var tempPath = _epgFilePath + ".tmp";
         long written;
 
@@ -555,6 +616,14 @@ public class EpgFilterService
     }
 
     /// <summary>
+    /// Canales que declaran las guías locales configuradas, según su última sincronización (vacío antes de la primera).
+    /// </summary>
+    /// <param name="sources">Guías configuradas.</param>
+    /// <returns>Canales de todas ellas.</returns>
+    internal IReadOnlyList<GuideChannelEntry> LoadGuideChannels(IEnumerable<EpgSource> sources)
+        => sources.SelectMany(s => GuideChannelCatalog.Load(ChannelsPath(s.Id))).ToList();
+
+    /// <summary>
     /// Guía automática, paso 1: identifica con iptv-org los canales que aún no tienen identidad (país, tvg-id, logo) y añade a
     /// las fuentes los XMLTV públicos de los países de esos canales. El emparejador de siempre reparte cada canal; lo que
     /// el usuario configuró a mano va primero y las automáticas nunca se guardan en la configuración.
@@ -722,6 +791,28 @@ public class EpgFilterService
     private static string FormatAge(TimeSpan age)
         => age.TotalHours < 1 ? "menos de 1 h" : age.TotalHours < 48 ? $"{(int)age.TotalHours} h" : $"{(int)age.TotalDays} d";
 
+    private string ChannelsPath(string sourceId) => Path.ChangeExtension(CachePath(sourceId), ".channels.json");
+
+    // Solo las guías que el administrador configuró: las automáticas son los XMLTV públicos de iptv-org, que la búsqueda ya consulta.
+    private void RememberGuideChannels(Configuration.PluginConfiguration config, EpgSource source, IReadOnlyList<EpgSourceChannel> channels)
+    {
+        if (!config.EpgSources.Any(s => string.Equals(s.Id, source.Id, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        try
+        {
+            GuideChannelCatalog.Save(
+                ChannelsPath(source.Id),
+                channels.Select(c => new GuideChannelEntry(source.Name, c.Id, c.Names, c.Logo)).ToList());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            PluginLog.Warn($"[EPG] No se pudo guardar la lista de canales de '{source.Name}': {ex.Message}");
+        }
+    }
+
     private string CachePath(string sourceId)
     {
         var dir = Path.GetDirectoryName(_epgFilePath) ?? string.Empty;
@@ -828,12 +919,14 @@ public class EpgFilterService
     /// <param name="sourceUrl">URL del XMLTV.</param>
     /// <param name="targets">Canales del plugin que necesitan guía.</param>
     /// <param name="channelCtx">Contexto (tipo/nombre) por clave de guía.</param>
+    /// <param name="onSourceChannels">Recibe todos los canales que declara la fuente, antes de filtrarlos.</param>
     /// <param name="ct">Token de cancelación.</param>
     /// <returns>Contenido filtrado (canales y programas de la fuente, sin enriquecer).</returns>
     private async Task<FilteredSource> DownloadFilteredAsync(
         string sourceUrl,
         List<EpgTarget> targets,
         Dictionary<string, (ChannelKind Kind, string Name, string? Country)> channelCtx,
+        Action<IReadOnlyList<EpgSourceChannel>> onSourceChannels,
         CancellationToken ct)
     {
         var client = _httpClientFactory.CreateClient("JellyTV");
@@ -845,15 +938,25 @@ public class EpgFilterService
             using (var dlCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
                 dlCts.CancelAfter(TimeSpan.FromMinutes(XmltvTimeoutMinutes));
-                using var response = await client.GetAsync(sourceUrl, HttpCompletionOption.ResponseHeadersRead, dlCts.Token).ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                using var body = await response.Content.ReadAsStreamAsync(dlCts.Token).ConfigureAwait(false);
-                using var file = new FileStream(downloaded, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-                await body.CopyToAsync(file, dlCts.Token).ConfigureAwait(false);
+                if (ProviderUrl.TryParseGuide(sourceUrl, out var providerId))
+                {
+                    // La guía de un proveedor (Pluto, Plex, Tubi) no es un archivo que bajar: el plugin la arma con la API del proveedor.
+                    var providers = Plugin.Instance?.Providers ?? throw new InvalidOperationException("El catálogo de proveedores no está disponible.");
+                    await providers.WriteGuideAsync(Plugin.Instance.Configuration, providerId, downloaded, dlCts.Token).ConfigureAwait(false);
+                }
+                else
+                {
+                    using var response = await client.GetAsync(sourceUrl, HttpCompletionOption.ResponseHeadersRead, dlCts.Token).ConfigureAwait(false);
+                    response.EnsureSuccessStatusCode();
+                    using var body = await response.Content.ReadAsStreamAsync(dlCts.Token).ConfigureAwait(false);
+                    using var file = new FileStream(downloaded, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+                    await body.CopyToAsync(file, dlCts.Token).ConfigureAwait(false);
+                }
             }
 
             // Pasada 1: lee todos los <channel> del archivo (algunas fuentes los intercalan con los <programme>).
             var sourceChannels = await ReadSourceChannelsAsync(downloaded).ConfigureAwait(false);
+            onSourceChannels(sourceChannels);
             var matches = EpgChannelMatcher.Match(targets, sourceChannels);
             var byName = matches.Values.Count(static m => m.Method == "nombre");
             PluginLog.Info($"[EPG] '{sourceUrl}': {sourceChannels.Count} canales en la fuente → {matches.Count} emparejados ({byName} por nombre)");
@@ -960,6 +1063,7 @@ public class EpgFilterService
             {
                 var id = reader.GetAttribute("id") ?? string.Empty;
                 var names = new List<string>();
+                string? logo = null;
                 using (var sub = reader.ReadSubtree())
                 {
                     while (await sub.ReadAsync().ConfigureAwait(false))
@@ -972,12 +1076,17 @@ public class EpgFilterService
                                 names.Add(text);
                             }
                         }
+                        else if (sub.NodeType == XmlNodeType.Element && sub.Name == "icon" && logo is null)
+                        {
+                            var src = sub.GetAttribute("src")?.Trim();
+                            logo = src is not null && src.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? src : null;
+                        }
                     }
                 }
 
                 if (id.Length > 0)
                 {
-                    list.Add(new EpgSourceChannel(id, names, EpgChannelMatcher.CountryFromId(id)));
+                    list.Add(new EpgSourceChannel(id, names, EpgChannelMatcher.CountryFromId(id), logo));
                 }
             }
 

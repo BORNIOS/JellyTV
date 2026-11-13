@@ -13,6 +13,7 @@ using Jellyfin.Plugin.JellyTV.Configuration;
 using Jellyfin.Plugin.JellyTV.Models;
 using Jellyfin.Plugin.JellyTV.Services;
 using Jellyfin.Plugin.JellyTV.Services.Identity;
+using Jellyfin.Plugin.JellyTV.Services.Providers;
 using Jellyfin.Plugin.JellyTV.Services.Storage;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
@@ -86,6 +87,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             var proxyPool = new ProxyPoolService(EffectiveUserAgent());
             ProxyPool = proxyPool;
             Upstream = new UpstreamClientService(localFactory, proxyPool);
+            Providers = new ProviderCatalogService(Upstream);
             RedirectResolver = new RedirectResolverService(localFactory, loggerFactory.CreateLogger<RedirectResolverService>(), proxyPool);
             HlsRewriter = new HlsRewriterService(localFactory, proxyPool, Upstream, RedirectResolver, loggerFactory.CreateLogger<HlsRewriterService>());
             SessionManager = new SessionManagerService(RedirectResolver, Upstream, loggerFactory.CreateLogger<SessionManagerService>());
@@ -121,6 +123,9 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 
     /// <summary>Gets the service that picks the HTTP client (direct or through a proxy) for each download.</summary>
     public UpstreamClientService Upstream { get; }
+
+    /// <summary>Gets the catalog of FAST providers (Pluto, Plex, Tubi) that channels can be imported from.</summary>
+    internal ProviderCatalogService Providers { get; }
 
     /// <summary>Gets the redirect resolver service.</summary>
     public RedirectResolverService RedirectResolver { get; }

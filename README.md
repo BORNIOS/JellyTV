@@ -43,6 +43,8 @@ Si contratas servicios de TV por internet (IPTV), cada canal es una dirección w
 - 🎬 **Enriquecimiento TMDB opcional** — títulos, descripciones y año para los programas de tu guía.
 - 📋 **Playlist M3U para apps externas** (IPTV Smarters, IPVIO, VLC…) siempre por el relay, con botón de copiar.
 - 🧩 **Proxies opcionales** — para proveedores que bloquean tu IP o canales restringidos por país.
+- 📚 **Catálogo de proveedores FAST** — importa canales de Pluto TV, Plex, Tubi y Runtime directo de su API; si ya tienes el canal, se añade como respaldo.
+- 🌐 **Panel en español e inglés** — sigue el idioma de tu usuario de Jellyfin.
 - 🖥️ **Panel de administración** — tablas con búsqueda y orden (por defecto alfabético), editor por canal, salud, cobertura de la guía, diagnóstico y registro.
 
 ---
@@ -82,8 +84,8 @@ Si contratas servicios de TV por internet (IPTV), cada canal es una dirección w
 ### Opción B — Manual
 
 1. Descarga la última versión desde [**Releases**](https://github.com/BORNIOS/JellyTV/releases).
-2. Extrae la carpeta `JellyTV_1.0.0` (contiene `Jellyfin.Plugin.JellyTV.dll`) dentro del
-   directorio de plugins de tu instalación.
+2. Crea una carpeta `JellyTV` dentro del directorio de plugins de tu instalación y extrae ahí el ZIP
+   (contiene solo `Jellyfin.Plugin.JellyTV.dll`).
 3. Reinicia Jellyfin.
 4. Ve a **Panel → Plugins → JellyTV** y añade tus canales.
 
@@ -99,10 +101,10 @@ Desde **Panel → Plugins → JellyTV** gestionas todo con pestañas:
 
 | Pestaña | Qué hay |
 |---|---|
-| **Resumen** | Estado general y *Acceso rápido*: copiar la playlist M3U y la URL de la guía |
+| **Resumen** | Estado general, **salud de canales** (verificación manual con barra de progreso, incluye los canales apagados; un canal apagado que resulta estar vivo se enciende solo) y *Acceso rápido*: copiar la playlist M3U y la URL de la guía; diagnóstico (sesiones y registro) |
 | **Canales** | Tabla de canales y editor por canal: nombre, tipo, **fuentes de respaldo**, logo, `tvg-id`, país, categoría, User-Agent y cabeceras, identidad y guía propia |
-| **Salud** | Estado de cada canal y de **cada fuente**, comprobación manual y diagnóstico (sesiones y registro) |
-| **Guía EPG** | Fuentes XMLTV, sincronización, cobertura por canal y qué fuente fue la principal de cada uno |
+| **Catálogo** | Canales de **Pluto TV, Plex, Tubi y Runtime** consultados directamente en cada proveedor, en un acordeón por proveedor para marcar solo los que quieres importar |
+| **Guía EPG** | Fuentes XMLTV, sincronización con barra de progreso, cobertura por canal y qué fuente fue la principal de cada uno |
 | **Proxies** | Proxies por país, con estado |
 | **Ajustes** | Cómo llegan los canales a Live TV, URL pública, User-Agent, TMDB, guía automática, recetas de guía HTML, zona horaria, tareas programadas y almacenamiento |
 
@@ -136,6 +138,7 @@ Ejemplo: `https://gateway.example/online.php?stream=canal` devuelve HTML con un 
 |---|---|---|
 | **Directo** | URL del proveedor | Direct Play real: sin relay, sin remux |
 | **Directo con país de salida** | Relay (por un proxy de ese país) | El dispositivo no puede llegar al origen bloqueado |
+| **Directo con ventana DVR enorme** | Relay (recorta a ~60 s de vivo) | Algunos proveedores publican horas de DVR (p. ej. 12 h = 10 800 segmentos, ~460 KB por recarga) y el navegador tarda en arrancar. Se detecta en la verificación de salud: hasta que corra una, el canal sigue directo |
 | **Tokenizado** (de sesión o efímero) | Relay | El proveedor ata el token a la IP que lo pidió (el servidor); un cliente con otra IP recibiría 403 |
 | **FAST** | Relay con limpieza | Se eliminan beacons y anuncios y se recorta la ventana DVR |
 
@@ -170,11 +173,34 @@ El modo se elige en **Ajustes → Cómo llegan los canales a Live TV**.
 
 ---
 
+## 📚 Catálogo de proveedores FAST
+
+La pestaña **Catálogo** importa canales gratuitos (Pluto TV, Plex, Tubi y Runtime) **sin intermediarios**: el plugin le pregunta a cada proveedor con la misma API que usa su web, no a listas de terceros.
+
+1. Abre un proveedor del acordeón: se consulta su catálogo (se recuerda 15 minutos).
+2. Marca los canales que quieres. Los que ya importaste salen como *Importado*, y los que coinciden por nombre con uno que ya tienes salen como *Ya tienes uno igual* (muchos canales están en varios proveedores).
+3. Si un canal coincide por nombre con uno que ya tienes, al marcarlo el badge cambia a **«Se agregará como respaldo»**: en vez de crear otro canal, el del proveedor se añade como **fuente de respaldo** de ese canal, que conserva su fuente principal, su guía y su identidad.
+4. **Importar**: cada canal se crea como **FAST** con su logo, su categoría y su `tvg-id` (el id del canal en el proveedor). Las categorías de cada proveedor se reducen a las de Jellyfin (**Movies, Series, Kids, News, Sports**) más **Music** y **General**, para no llenar la lista de micro categorías, y la **guía del proveedor** se añade a las fuentes EPG. Sincroniza la guía para ver la programación.
+
+Cómo se reproducen: el canal no guarda una URL con token sino una dirección interna (`jtv-provider://…`) que el plugin traduce a la URL real **cada vez que abre el canal**, con su token vigente; si el proveedor rechaza el token (401/403), lo renueva. La guía de estos canales también se arma con la API del proveedor.
+
+| Proveedor | Cómo se consulta | Catálogo |
+|---|---|---|
+| **Pluto TV** | `boot.pluto.tv` (sesión con JWT de ~24 h) y `service-channels.clusters.pluto.tv` | Por IP (LATAM desde México) |
+| **Plex** | Token anónimo de `clients.plex.tv` y `epg.provider.plex.tv` | Por IP (278 canales desde México) |
+| **Tubi** | `tubitv.com/live` y `oz/epg/programming`, sin cuenta | Por IP: desde México son pocos canales; el de EE. UU. es mucho mayor |
+| **Runtime** | API de su web (`api-ott.runtime.tv`) con el token público que la página entrega a cualquier visitante; sin cuenta | ~40 canales lineales de cine, series y aliados; algunos solo en ciertos países |
+
+- **Geobloqueo:** el proveedor decide el catálogo por la IP de quien pregunta, es decir, la del servidor. El selector *Consultar los catálogos desde* usa un proxy de salida de otro país (pestaña **Proxies**); los canales importados guardan ese país de salida y se descargan por ese proxy.
+- Las direcciones y APIs de estos servicios no son oficiales ni estables: si un proveedor cambia la suya, ese proveedor deja de funcionar hasta que se actualice el plugin. La verificación de salud lo marca.
+- Los proveedores se añaden como código (una clase por proveedor); aún no están Samsung TV Plus, LG Channels ni Canela TV. Roku y ViX se descartaron: sus streams van cifrados con DRM (Widevine) y no pueden pasar por el relay.
+
 ## 🪪 Identidad de los canales (iptv-org)
 
 Cada canal puede identificarse en la [base de datos pública de iptv-org](https://github.com/iptv-org/database) (Unlicense; cubre canales de TV, web y FAST). Con la identidad el plugin **rellena lo que le falte al canal**: país, `tvg-id`, logo y sitio web. Nunca pisa lo que escribiste tú.
 
 - **Buscar identidad** (en la ficha del canal) propone candidatos. Si el `tvg-id` del canal coincide con un id de la base (p. ej. `ESPN.us`), esa coincidencia gana.
+- **Tus guías locales también cuentan como candidatos.** Pluto, Samsung, Plex o Tubi no usan `tvg-id` sino su propio id de canal: al sincronizar la guía, el plugin guarda la lista de canales de cada fuente que añadiste a mano, y *Buscar identidad* los ofrece junto con su logo («guía Plex»). Al elegir uno, su id pasa al `tvg-id` del canal. Nada se aplica solo.
 - **Completar identidad y logos** (pestaña Canales) lo hace en lote y solo aplica coincidencias exactas; si el nombre existe en varios países (p. ej. `ESPN` en US, BR, AU) y el canal no tiene país, **no adivina** y lo deja sin tocar. Lo que confirmas a mano no se sobrescribe.
 - Los datos de iptv-org son tres archivos JSON públicos (`channels.json`, `logos.json` y `guides.json`, unos 5 MB de descarga comprimida, ≈40 MB descomprimidos) que solo describen a los canales; **no traen programación** (esa viene de la guía, más abajo). El plugin guarda una copia reducida como caché en la **carpeta de caché de Jellyfin** (`<caché>/JellyTV/iptvorg.json`) durante 7 días, así que no se vuelven a descargar en cada uso. Es desechable (si se borra, se vuelve a bajar sola) e independiente del almacenamiento (PostgreSQL o JSON). No hacen falta claves.
 
@@ -241,6 +267,8 @@ El modelo completo —tablas, relaciones canal↔respaldos, índices, flujo de f
 | `GET /JellyTV/segment?sid=…&url=…` | Proxy de segmentos |
 | `GET /JellyTV/channels` | Estado de salud de los canales *(admin)* |
 | `POST /JellyTV/health-check` | Health check manual en segundo plano *(admin)* |
+| `GET /JellyTV/providers`, `/providers/{id}/channels` | Proveedores del catálogo y sus canales *(admin)* |
+| `POST /JellyTV/providers/{id}/import` | Importa canales del catálogo; los repetidos entran como respaldo *(admin)* |
 | `POST /JellyTV/refresh-guide` | Re-sincroniza la guía EPG *(admin)* |
 | `GET /JellyTV/sessions`, `/log`, `/metrics` | Diagnóstico *(admin)* |
 | `GET /JellyTV/storage` | Backend de almacenamiento activo *(admin)* |
@@ -284,8 +312,8 @@ clientes y **no** lo renueva de forma proactiva; si el proveedor responde 401/40
 <summary><b>Un canal tiene varias fuentes, ¿cuál se usa?</b></summary>
 
 La primera fuente habilitada que el health check marca como viva. Si al abrir el canal una fuente falla,
-el plugin prueba la siguiente y recuerda la que funcionó. La pestaña **Salud** muestra qué fuente está viva
-y cuál caída (con su último error). Si todas están caídas, el canal se marca como caído.
+el plugin prueba la siguiente y recuerda la que funcionó. La columna **Salud** de la pestaña Canales y el editor
+de cada canal muestran qué fuente está viva y cuál caída (con su último error). Si todas están caídas, el canal se marca como caído.
 </details>
 
 <details>
@@ -323,12 +351,14 @@ dotnet build Jellyfin.Plugin.JellyTV.sln -c Release
 # Publicar el DLL
 dotnet publish Jellyfin.Plugin.JellyTV/Jellyfin.Plugin.JellyTV.csproj -c Release -o publish
 
-# Pruebas de regresión (HLS, extracción de tokens y emparejado de guías)
+# Pruebas de regresión (HLS, tokens, guías, proveedores e i18n del panel)
 dotnet run --project tests/JellyTV.HlsRegression -c Release -p:RunAnalyzers=false
 
 # Con comprobación contra los servicios públicos reales (necesita red)
 dotnet run --project tests/JellyTV.HlsRegression -c Release -p:RunAnalyzers=false -- --live
 ```
+
+**Panel de configuración.** Se escribe en piezas dentro de `Jellyfin.Plugin.JellyTV/Configuration/Page/` (`page.html`, `page.css`, `i18n.js`, `app.js`) y la compilación las une en el único `configPage.html` que sirve Jellyfin. El texto fuente está en español; las traducciones al inglés viven en `i18n.js` y una prueba de regresión falla si falta alguna.
 
 ---
 

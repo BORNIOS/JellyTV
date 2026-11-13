@@ -47,6 +47,11 @@ public class ChannelHealthCheckService
     private string? _ffmpegPath;
     private DateTimeOffset _lastFfmpegCheck = DateTimeOffset.MinValue;
 
+    // Avance de la revisión en curso (fuentes comprobadas / fuentes totales) para la barra del panel.
+    private TaskProgress _progress = TaskProgress.Idle;
+    private int _running;
+    private int _done;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="ChannelHealthCheckService"/> class.
     /// </summary>
@@ -67,6 +72,17 @@ public class ChannelHealthCheckService
         _sessionManager = sessionManager;
         _upstream = upstream;
         _applicationPaths = applicationPaths;
+    }
+
+    /// <summary>Gets a value indicating whether a health check is running.</summary>
+    public bool IsRunning => Volatile.Read(ref _running) == 1;
+
+    /// <summary>Gets the progress of the running (or last finished) health check.</summary>
+    /// <returns>Progress snapshot.</returns>
+    public TaskProgress GetProgress()
+    {
+        var p = Volatile.Read(ref _progress);
+        return p.Running ? p with { Done = Volatile.Read(ref _done) } : p;
     }
 
     /// <summary>
@@ -104,6 +120,25 @@ public class ChannelHealthCheckService
                 PluginLog.Info($"[HEALTH] Cache hit for {channelName}");
                 return cached.Item1;
             }
+        }
+
+        // Un canal de un proveedor guarda una dirección interna: se resuelve a la real y esa es la que se comprueba.
+        if (Providers.ProviderUrl.IsProviderUrl(channelUrl) && Plugin.Instance?.Providers is { } providers)
+        {
+            ChannelHealthStatus status;
+            try
+            {
+                var resolved = await providers.ResolveAsync(channelUrl, ct).ConfigureAwait(false);
+                status = await QuickCheckWithRetryAsync(channelName, resolved.FinalUrl, exitCountry, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                status = new ChannelHealthStatus { ChannelName = channelName, CheckedAt = DateTimeOffset.UtcNow, ErrorMessage = ex.Message };
+            }
+
+            status.ChannelUrl = channelUrl;
+            _healthCache[channelUrl] = (status, DateTimeOffset.UtcNow);
+            return status;
         }
 
         // Direct (non-token) streams: quick HTTP check, no session resolution.
@@ -283,6 +318,7 @@ public class ChannelHealthCheckService
                 }
                 finally
                 {
+                    Interlocked.Increment(ref _done);
                     semaphore.Release();
                 }
             });
@@ -335,24 +371,63 @@ public class ChannelHealthCheckService
     /// <summary>
     /// Checks every enabled source of the given channels and applies the results to each source's
     /// health. Channels with no live source are auto-disabled; a channel that was auto-disabled is
-    /// re-enabled as soon as any of its sources comes back online. Mutates the passed channel list.
+    /// re-enabled as soon as any of its sources comes back online. A channel that is switched off but whose source answers is
+    /// switched on again, so a live channel never stays off. A channel none of whose sources produced a result (the run was
+    /// interrupted, for instance) keeps its state and is not counted as dead. Mutates the passed channel list.
     /// </summary>
-    /// <returns><placeholder>A <see cref="Task"/> representing the asynchronous operation.</placeholder></returns>
+    /// <param name="label">Name of the run, for the log.</param>
+    /// <param name="channels">Channels to check.</param>
+    /// <param name="force">Ignore the 30-minute cache for every channel (manual runs).</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Channel and source counts; zeros when another check is already running.</returns>
     public async Task<(int ChannelsAlive, int ChannelsDead, int SourcesChecked, int SourcesAlive)> CheckConfiguredChannelsAsync(
         string label,
         IReadOnlyList<ChannelEntry> channels,
+        bool force = false,
         CancellationToken ct = default)
     {
-        var candidates = channels.Where(c => c.IsEnabled || c.AutoDisabled).ToList();
+        if (Interlocked.CompareExchange(ref _running, 1, 0) == 1)
+        {
+            return (0, 0, 0, 0);
+        }
+
+        var startedAt = DateTimeOffset.UtcNow;
+        Volatile.Write(ref _done, 0);
+        Volatile.Write(ref _progress, new TaskProgress(true, "Comprobando fuentes", string.Empty, 0, 0, startedAt, null, null));
+        try
+        {
+            var result = await CheckConfiguredCoreAsync(label, channels, force, startedAt, ct).ConfigureAwait(false);
+            Volatile.Write(ref _progress, new TaskProgress(false, string.Empty, string.Empty, Volatile.Read(ref _done), Volatile.Read(ref _done), startedAt, DateTimeOffset.UtcNow, $"{result.ChannelsAlive} vivos · {result.ChannelsDead} caídos"));
+            return result;
+        }
+        catch
+        {
+            Volatile.Write(ref _progress, new TaskProgress(false, string.Empty, string.Empty, Volatile.Read(ref _done), Volatile.Read(ref _done), startedAt, DateTimeOffset.UtcNow, "Interrumpida"));
+            throw;
+        }
+        finally
+        {
+            Volatile.Write(ref _running, 0);
+        }
+    }
+
+    private async Task<(int ChannelsAlive, int ChannelsDead, int SourcesChecked, int SourcesAlive)> CheckConfiguredCoreAsync(
+        string label,
+        IReadOnlyList<ChannelEntry> channels,
+        bool force,
+        DateTimeOffset startedAt,
+        CancellationToken ct)
+    {
+        var candidates = channels.ToList();
         // Los canales AutoDisabled (caídos) se re-chequean SIN caché en cada corrida para detectar
         // el regreso cuanto antes; los habilitados respetan la caché (30 min) para no martirizar
-        // los upstreams.
+        // los upstreams. Una corrida manual lo comprueba todo de nuevo.
         var toForce = new List<(string Name, string Url, int Type, bool SessionToken, string? ExitCountry)>();
         var toCache = new List<(string Name, string Url, int Type, bool SessionToken, string? ExitCountry)>();
         foreach (var ch in candidates)
         {
             ch.EnsureMigratedSources();
-            var target = ch.AutoDisabled ? toForce : toCache;
+            var target = ch.AutoDisabled || force ? toForce : toCache;
             foreach (var s in ch.Sources)
             {
                 if (s.IsEnabled && !string.IsNullOrWhiteSpace(s.Url))
@@ -361,6 +436,8 @@ public class ChannelHealthCheckService
                 }
             }
         }
+
+        Volatile.Write(ref _progress, new TaskProgress(true, "Comprobando fuentes", string.Empty, 0, toCache.Count + toForce.Count, startedAt, null, null));
 
         var results = new List<ChannelHealthStatus>();
         if (toCache.Count > 0)
@@ -388,6 +465,7 @@ public class ChannelHealthCheckService
             }
 
             bool anyAlive = false;
+            bool anyResult = false;
             string? lastError = null;
             DateTimeOffset? lastChecked = null;
             foreach (var s in enabledSources)
@@ -397,6 +475,7 @@ public class ChannelHealthCheckService
                     continue;
                 }
 
+                anyResult = true;
                 s.LastCheckedAt = r.CheckedAt;
                 s.IsAlive = r.IsAlive;
                 s.LastError = r.IsAlive ? null : r.ErrorMessage;
@@ -414,6 +493,12 @@ public class ChannelHealthCheckService
                 lastChecked = r.CheckedAt;
             }
 
+            if (!anyResult)
+            {
+                // Nunca se comprobó (corrida interrumpida o sin resultado): no es un canal caído, se deja como estaba.
+                continue;
+            }
+
             ch.LastCheckedAt = lastChecked;
             ch.LastCheckError = lastError;
             ch.LastCheckAlive = enabledSources.Any(s => s.IsAlive == true) ? true : enabledSources.Any(s => s.IsAlive == false) ? false : null;
@@ -421,7 +506,7 @@ public class ChannelHealthCheckService
             if (anyAlive)
             {
                 channelsAlive++;
-                if (ch.AutoDisabled)
+                if (!ch.IsEnabled)
                 {
                     ch.AutoDisabled = false;
                     ch.IsEnabled = true;
@@ -830,6 +915,8 @@ public class ChannelHealthCheckService
                         playlistBaseUrl = BuildBaseUrl(variantUrl);
                     }
                 }
+
+                PlaylistWindows.Record(session.UpstreamUrl, playlistContent);
 
                 // 2. Extract and try multiple segments (first segment can already be stale in live HLS).
                 var segmentUrls = ExtractHlsSegments(playlistContent, playlistBaseUrl, maxCount: 5);

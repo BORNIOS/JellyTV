@@ -2,11 +2,11 @@
   {
     "guid": "f8a3c1d7-9b2e-4a5f-8c6d-3e1b7f4a2d9c",
     "name": "JellyTV",
-    "description": "Jellyfin Live TV plugin that manages individual IPTV channels (direct, FAST and tokenized) with automatic token renewal, backup sources and an automatic EPG guide, without requiring an external M3U tuner.",
-    "overview": "JellyTV expone tus canales IPTV como un proveedor nativo de Live TV. Los canales Directo se entregan tal cual; los FAST y Tokenizados pasan por un relay que reescribe el HLS y mantiene el token fresco (por sesión o efímero). Cada canal puede tener fuentes de respaldo, y la guía EPG se completa sola a partir de iptv-org. Sin transcodificación.",
+    "description": "Jellyfin Live TV plugin that manages individual IPTV channels (direct, FAST and tokenized) with automatic token renewal, backup sources, a FAST provider catalog (Pluto TV, Plex, Tubi, Runtime) and an automatic EPG guide, without requiring an external M3U tuner.",
+    "overview": "JellyTV expone tus canales IPTV como un proveedor nativo de Live TV. Los canales Directo se entregan tal cual; los FAST y Tokenizados pasan por un relay que reescribe el HLS y mantiene el token fresco (por sesión o efímero). Cada canal puede tener fuentes de respaldo, y la guía EPG se completa sola a partir de iptv-org. Importa canales gratuitos de Pluto TV, Plex, Tubi y Runtime desde el catálogo. Panel en español e inglés. Sin transcodificación.",
     "owner": ".:BORNIOS:.",
     "category": "LiveTV",
-    "imageUrl": "",
+    "imageUrl": "https://raw.githubusercontent.com/BORNIOS/JellyTV/main/Jellyfin.Plugin.JellyTV/Resources/logo.png",
     "versions": [
       {
         "version": "1.0.0.0",
