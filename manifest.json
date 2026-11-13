@@ -15,6 +15,14 @@
         "sourceUrl": "https://github.com/BORNIOS/JellyTV/releases/download/v1.0.0/Jellyfin.Plugin.JellyTV-1.0.0.0.zip",
         "checksum": "07a243e8291deb288b2bdfb9ff2ce2d3",
         "timestamp": "2026-11-11T08:40:24Z"
+      },
+      {
+        "version": "1.1.0.0",
+        "changelog": "ES: Catálogo de proveedores FAST: importa canales de Pluto TV, Plex, Tubi y Runtime directo de su API, con logo, categoría y guía; si ya tienes el canal, se añade como fuente de respaldo en vez de duplicarse; salida por proxy de otro país para catálogos con geobloqueo. Salud de canales: los del catálogo se comprueban resolviendo su URL, los apagados también se revisan y un canal apagado que está vivo se enciende solo; un canal sin resultado ya no se marca como muerto. Panel en español e inglés según el idioma del usuario. Guías locales como candidatos de identidad y resumen con barras de progreso. Requiere Jellyfin 12.1 o superior.\nEN: FAST provider catalog: import channels from Pluto TV, Plex, Tubi and Runtime straight from their API, with logo, category and guide; if you already have the channel, it is added as a backup source instead of a duplicate; exit through a proxy in another country for geo-blocked catalogs. Channel health: catalog channels are checked by resolving their URL, switched-off channels are checked too and a switched-off channel found alive is turned on automatically; a channel with no result is no longer marked dead. Panel in Spanish and English following the user language. Local guides as identity candidates and a summary with progress bars. Requires Jellyfin 12.1 or later.",
+        "targetAbi": "12.1.0.0",
+        "sourceUrl": "https://github.com/BORNIOS/JellyTV/releases/download/v1.1.0/Jellyfin.Plugin.JellyTV-1.1.0.0.zip",
+        "checksum": "d4d6bcd6850b292ead90aedd4a4de2ac",
+        "timestamp": "2026-11-13T03:13:08Z"
       }
     ]
   }
